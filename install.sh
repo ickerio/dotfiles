@@ -12,6 +12,12 @@ install_packages() {
     sudo pacman -S hyprland hyprpaper kitty nautilus code openssh nano
 }
 
+enable_bluetooth() {
+    echo "Enabling bluetooth"
+    sudo pacman -S bluez bluez-utils
+    sudo systemctl enable bluetooth.service
+}
+
 install_laptop_gpu_power_saving() {
     echo "Laptop GPU power saving"
     sudo pacman -S bbswitch bumblebee
@@ -54,6 +60,7 @@ if [[ "$1" == "laptop" ]]; then
 fi
 
 install_packages
+enable_bluetooth
 install_yay
 install_aur_packages
 create_symlinks
