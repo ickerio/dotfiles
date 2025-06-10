@@ -9,7 +9,7 @@ fi
 
 install_packages() {
     echo "Installing packages"
-    sudo pacman -S nvidia hyprland hyprpaper kitty nautilus openssh nano
+    sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano
 }
 
 enable_bluetooth() {
