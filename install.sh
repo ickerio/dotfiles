@@ -35,7 +35,6 @@ install_aur_packages() {
 create_symlinks() {
     echo "Creating symlinks"
     ln -s "$(pwd)/hypr" ~/.config/hypr
-    ln -s "$(pwd)/kitty" ~/.config/kitty
     ln -s "$(pwd)/wallpaper.png" ~/wallpaper.png
 }
 
