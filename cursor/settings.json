@@ -3,5 +3,6 @@
     "window.commandCenter": true,
     "window.titleBarStyle": "native",
     "window.customTitleBarVisibility": "auto",
-    "git.autofetch": true
+    "git.autofetch": true,
+    "git.confirmSync": false
 }
