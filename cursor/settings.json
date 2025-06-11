@@ -1,0 +1,6 @@
+{
+    "workbench.navigationControl.enabled": false,
+    "window.commandCenter": true,
+    "window.titleBarStyle": "native",
+    "window.customTitleBarVisibility": "auto"
+}
