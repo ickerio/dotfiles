@@ -4,5 +4,6 @@
     "window.titleBarStyle": "native",
     "window.customTitleBarVisibility": "auto",
     "git.autofetch": true,
-    "git.confirmSync": false
+    "git.confirmSync": false,
+    "git.enableSmartCommit": true
 }
