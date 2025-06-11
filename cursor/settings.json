@@ -2,5 +2,6 @@
     "workbench.navigationControl.enabled": false,
     "window.commandCenter": true,
     "window.titleBarStyle": "native",
-    "window.customTitleBarVisibility": "auto"
+    "window.customTitleBarVisibility": "auto",
+    "git.autofetch": true
 }
