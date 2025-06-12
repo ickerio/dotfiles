@@ -9,7 +9,7 @@ fi
 
 install_packages() {
     echo "Installing packages"
-    sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano spotify-launcher
+    sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano spotify-launcher ttf-jetbrains-mono
 }
 
 enable_bluetooth() {
