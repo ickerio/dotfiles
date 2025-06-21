@@ -12,12 +12,6 @@ install_packages() {
     sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano spotify-launcher ttf-jetbrains-mono
 }
 
-enable_bluetooth() {
-    echo "Enabling bluetooth"
-    sudo pacman -S bluez bluez-utils
-    sudo systemctl enable bluetooth.service
-}
-
 install_yay() {
     echo "Installing yay"
     pacman -S --needed git base-devel
@@ -34,14 +28,16 @@ install_aur_packages() {
 }
 
 create_udev_rules() {
-    sudo cp udev/70-wooting.rules /etc/udev/rules.d/
-    sudo cp udev/99-finalmouse.rules /etc/udev/rules.d/
+    sudo cp peripherals/70-wooting.rules /etc/udev/rules.d/
+    sudo cp peripherals/99-finalmouse.rules /etc/udev/rules.d/
     sudo udevadm control --reload-rules && sudo udevadm trigger
 }
 
 create_symlinks() {
-    echo "Creating symlinks"
+    echo "Symlinking config files"
     ln -s "$(pwd)/hypr" ~/.config/hypr
+    ln -s "$(pwd)/foot" ~/.config/foot
+
     ln -s "$(pwd)/wallpaper.png" ~/wallpaper.png
     ln -s "$(pwd)/cursor/settings.json" ~/.config/Cursor/User/settings.json
 }
@@ -52,7 +48,6 @@ generate_key() {
 }
 
 install_packages
-#enable_bluetooth
 install_yay
 install_aur_packages
 create_udev_rules

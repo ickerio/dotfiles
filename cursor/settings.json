@@ -2,9 +2,10 @@
     "workbench.navigationControl.enabled": false,
     "window.commandCenter": true,
     "window.customTitleBarVisibility": "auto",
-    "window.titleBarStyle": "custom",
+    "window.titleBarStyle": "native",
     "git.autofetch": true,
     "git.confirmSync": false,
     "git.enableSmartCommit": true,
-    "editor.fontFamily": "'Jetbrains Mono', 'monospace', monospace"
+    "editor.fontFamily": "'Jetbrains Mono', 'monospace', monospace",
+    "explorer.confirmDelete": false
 }
