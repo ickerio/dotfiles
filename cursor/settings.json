@@ -7,5 +7,12 @@
     "git.confirmSync": false,
     "git.enableSmartCommit": true,
     "editor.fontFamily": "'Jetbrains Mono', 'monospace', monospace",
-    "explorer.confirmDelete": false
+    "explorer.confirmDelete": false,
+    "svelte.enable-ts-plugin": true,
+    "[svelte]": {
+        "editor.defaultFormatter": "svelte.svelte-vscode"
+    },
+    "workbench.tree.indent": 16,
+    "explorer.confirmDragAndDrop": false,
+    "extensions.ignoreRecommendations": true
 }

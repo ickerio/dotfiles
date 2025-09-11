@@ -9,7 +9,7 @@ fi
 
 install_packages() {
     echo "Installing packages"
-    sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano spotify-launcher ttf-jetbrains-mono
+    sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano spotify-launcher unzip ttf-jetbrains-mono
 }
 
 install_yay() {
@@ -20,6 +20,10 @@ install_yay() {
     makepkg -si
     cd ..
     rm -r yay
+}
+
+install_bun() {
+    curl -fsSL https://bun.sh/install | bash
 }
 
 install_aur_packages() {
@@ -40,6 +44,7 @@ create_symlinks() {
 
     ln -s "$(pwd)/wallpaper.png" ~/wallpaper.png
     ln -s "$(pwd)/cursor/settings.json" ~/.config/Cursor/User/settings.json
+    ln -s "$(pwd)/.bashrc" ~/.bashrc
 }
 
 generate_key() {
@@ -49,6 +54,7 @@ generate_key() {
 
 install_packages
 install_yay
+install_bun
 install_aur_packages
 create_udev_rules
 create_symlinks
