@@ -9,7 +9,7 @@ fi
 
 install_packages() {
     echo "Installing packages"
-    sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano spotify-launcher unzip ttf-jetbrains-mono
+    sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano spotify-launcher unzip ttf-jetbrains-mono docker
 }
 
 install_yay() {
