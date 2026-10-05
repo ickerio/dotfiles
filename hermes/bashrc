@@ -11,3 +11,10 @@ alias grep='grep --color=auto'
 PS1='[hermes \W]\$ '
 
 export PATH="$HOME/.local/bin:$PATH"
+
+# Shared group workspace (/srv/hshare) needs group-writable files by default.
+# The default ACL alone is not enough: umask 022 would still strip group-write
+# from new files, leaving them read-only for the other user.
+# Safe here: this user's private group has no other members, so group-writable
+# means nothing anywhere except the shared directory, where it is the point.
+umask 002
