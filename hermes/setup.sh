@@ -9,9 +9,10 @@
 # Arch Linux assumed (pacman for nodejs). Safe to re-run: every step checks
 # state first and reports done vs skipped.
 #
-# What it automates: user/group/shared dir, minimal dotfiles, Node + Claude Code
-# CLI, the Hermes CLI itself, the claude-subscription-directsdk plugin, model
-# provider selection, and the boot-time gateway service (user unit + linger).
+# What it automates: user/group/shared dir, minimal dotfiles, Claude Code CLI
+# (native installer, per-user), the Hermes CLI itself, the
+# claude-subscription-directsdk plugin, model provider selection, and the
+# boot-time gateway service (user unit + linger).
 # What stays manual (interactive): `claude auth login` (OAuth browser flow) and
 # `hermes setup` (Telegram token etc.) — checked and printed at the end.
 
@@ -81,11 +82,12 @@ fi
 
 # 5. minimal dotfiles for the hermes user
 cp "$SCRIPT_DIR/bashrc" /home/hermes/.bashrc
+cp "$SCRIPT_DIR/bash_profile" /home/hermes/.bash_profile
 cp "$SCRIPT_DIR/gitconfig" /home/hermes/.gitconfig
-chown hermes:hermes /home/hermes/.bashrc /home/hermes/.gitconfig
-chmod 600 /home/hermes/.bashrc /home/hermes/.gitconfig
+chown hermes:hermes /home/hermes/.bashrc /home/hermes/.bash_profile /home/hermes/.gitconfig
+chmod 600 /home/hermes/.bashrc /home/hermes/.bash_profile /home/hermes/.gitconfig
 chmod 700 /home/hermes
-done_msg "installed .bashrc/.gitconfig for hermes; locked /home/hermes to 700"
+done_msg "installed .bashrc/.bash_profile/.gitconfig for hermes; locked /home/hermes to 700"
 
 # 6. systemd-friendly env file (for EnvironmentFile= in the future unit)
 mkdir -p /etc/hermes
@@ -116,23 +118,17 @@ else
     skip_msg "main-user setup (set MAIN_USER=<name> to add them to hshare and chmod 700 their home)"
 fi
 
-# 8. Node.js + Claude Code CLI (system-wide, so the hermes user gets it on PATH)
-if command -v claude >/dev/null 2>&1; then
-    skip_msg "claude CLI already installed ($(command -v claude))"
+# 8. Claude Code CLI via the native installer (per-user, as hermes).
+# npm install is deprecated upstream; the native installer drops a
+# self-contained binary at ~/.local/bin/claude (already on PATH via the
+# managed bashrc) with background auto-updates. No Node.js needed.
+if [ -x /home/hermes/.local/bin/claude ]; then
+    skip_msg "claude CLI already installed (/home/hermes/.local/bin/claude)"
 else
-    if ! command -v npm >/dev/null 2>&1; then
-        if command -v pacman >/dev/null 2>&1; then
-            pacman -S --needed --noconfirm nodejs npm
-            done_msg "installed nodejs + npm via pacman"
-        else
-            warn_msg "no npm and no pacman; install Node.js manually, then run: npm install -g @anthropic-ai/claude-code"
-        fi
+    if as_hermes bash -c 'curl -fsSL https://claude.ai/install.sh | bash'; then
+        done_msg "installed Claude Code via native installer (as hermes)"
     else
-        skip_msg "npm already present"
-    fi
-    if command -v npm >/dev/null 2>&1; then
-        npm install -g @anthropic-ai/claude-code
-        done_msg "installed @anthropic-ai/claude-code globally"
+        warn_msg "Claude Code native installer failed; see output above"
     fi
 fi
 
@@ -244,7 +240,7 @@ fi
 # 13. auth status checks -> manual follow-ups below
 echo ""
 echo "=== Auth / config status ==="
-if as_hermes claude auth status >/dev/null 2>&1; then
+if [ -x /home/hermes/.local/bin/claude ] && as_hermes /home/hermes/.local/bin/claude auth status >/dev/null 2>&1; then
     done_msg "claude CLI is logged in (Pro/Max subscription usable by hermes user)"
     NEED_CLAUDE_LOGIN=0
 else
