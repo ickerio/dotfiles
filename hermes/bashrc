@@ -1,0 +1,13 @@
+#
+# ~/.bashrc — minimal shell env for the headless `hermes` service user.
+# Managed by dotfiles/hermes/setup.sh — edit the repo copy, not this file.
+#
+
+# If not running interactively, don't do anything
+[[ $- != *i* ]] && return
+
+alias ls='ls --color=auto'
+alias grep='grep --color=auto'
+PS1='[hermes \W]\$ '
+
+export PATH="$HOME/.local/bin:$PATH"
