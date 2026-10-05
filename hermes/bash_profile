@@ -1,0 +1,9 @@
+#
+# ~/.bash_profile — sourced by login shells; pull in .bashrc so PATH and
+# aliases apply to `sudo -u hermes -i` sessions too.
+# Managed by dotfiles/hermes/setup.sh — edit the repo copy, not this file.
+#
+
+if [ -f "$HOME/.bashrc" ]; then
+    . "$HOME/.bashrc"
+fi
