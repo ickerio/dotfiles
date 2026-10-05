@@ -1,0 +1,8 @@
+# Managed by dotfiles/hermes/setup.sh — bot identity for the hermes service user.
+# Commits from this user must never impersonate the human owner:
+# deliberately no commit signing configured here.
+[user]
+	name = hermes
+	email = hermes@localhost
+[init]
+	defaultBranch = master
