@@ -9,7 +9,7 @@ fi
 
 install_packages() {
     echo "Installing packages"
-    sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano spotify-launcher unzip ttf-jetbrains-mono docker
+    sudo pacman -S nvidia-open nvidia-utils hyprland hyprpaper openssh nano unzip ttf-jetbrains-mono docker
 }
 
 install_yay() {
@@ -28,7 +28,7 @@ install_bun() {
 
 install_aur_packages() {
     echo "Installing AUR packages"
-    yay -S cursor-bin brave-bin aylurs-gtk-shell
+    yay -S cursor-bin brave-bin aylurs-gtk-shell spotifast-bin
 }
 
 create_udev_rules() {
