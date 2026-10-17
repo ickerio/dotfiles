@@ -29,7 +29,7 @@ enable_multilib() {
 install_packages() {
     echo "Installing packages"
     sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono noto-fonts \
-        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher github-cli fzf zoxide
+        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher github-cli fzf zoxide rust
 
     case "$MACHINE" in
         pc)
@@ -104,6 +104,12 @@ create_symlinks() {
     ln -sf "$(pwd)/.bashrc" ~/.bashrc
 }
 
+install_cairn() {
+    echo "Building cairn"
+    cargo build --release --manifest-path cairn/Cargo.toml
+    sudo install -Dm755 cairn/target/release/cairn /usr/local/bin/cairn
+}
+
 generate_key() {
     echo "Generating key"
     ssh-keygen
@@ -121,4 +127,5 @@ if [ "$MACHINE" = xps ]; then
     configure_xps
 fi
 create_symlinks
+install_cairn
 generate_key

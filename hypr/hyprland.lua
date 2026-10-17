@@ -4,6 +4,7 @@ require("machine")
 hl.on("hyprland.start", function()
     hl.exec_cmd("hyprpaper")
     hl.exec_cmd("foot --server")
+    hl.exec_cmd("cairn")
 
     hl.exec_cmd("brave",            { workspace = "1 silent" })
     hl.exec_cmd("code",             { workspace = "2 silent" })

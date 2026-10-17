@@ -8,6 +8,8 @@ personal use, i wouldn't recommend trying them
  - Run `start-hyprland` from the TTY (not `Hyprland`, it skips the crash watchdog)
  - Login to Brave Sync, Spotify and Claude Code in VS Code
 
+[cairn](cairn/src/main.rs) draws battery, wifi, CPU, memory and the time onto the desktop in JetBrains Mono, with no dependencies. Run `cairn/glyphs.sh` after changing its fonts.
+
 ## XPS 15 9560
 Before installing, in UEFI (`F2` on boot, see the [Arch wiki](https://wiki.archlinux.org/title/Dell_XPS_15_(9560))):
  - SATA Mode: RAID -> AHCI (otherwise the NVMe SSD isn't detected)
