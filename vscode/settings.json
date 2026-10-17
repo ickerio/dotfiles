@@ -3,6 +3,7 @@
     "window.commandCenter": true,
     "window.customTitleBarVisibility": "auto",
     "window.titleBarStyle": "native",
+    "window.menuBarVisibility": "hidden",
     "git.autofetch": true,
     "git.confirmSync": false,
     "git.enableSmartCommit": true,
@@ -14,5 +15,10 @@
     },
     "workbench.tree.indent": 16,
     "explorer.confirmDragAndDrop": false,
-    "extensions.ignoreRecommendations": true
+    "extensions.ignoreRecommendations": true,
+    "claudeCode.preferredLocation": "panel",
+    "telemetry.telemetryLevel": "off",
+    "chat.titleBar.openInAgentsWindow.enabled": false,
+    "chat.agentsControl.enabled": "hidden",
+    "terminal.integrated.initialHint": false
 }

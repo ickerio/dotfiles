@@ -7,7 +7,18 @@
 
 alias ls='ls --color=auto'
 alias grep='grep --color=auto'
-PS1='[\u@\h \W]\$ '
+
+# Prompt: folder and git branch
+. /usr/share/git/completion/git-prompt.sh
+GIT_PS1_SHOWDIRTYSTATE=1
+GIT_PS1_SHOWUNTRACKEDFILES=1
+
+PS1='\[\e[1;34m\]\w\[\e[0m\]$(__git_ps1 " \[\e[35m\](%s)\[\e[0m\]") '
+
+# Ctrl+R history search, Ctrl+T file picker, Alt+C cd into folder
+command -v fzf >/dev/null && eval "$(fzf --bash)"
+# `z <part of folder name>` jumps to frequently used folders
+command -v zoxide >/dev/null && eval "$(zoxide init bash)"
 
 # bun
 export BUN_INSTALL="$HOME/.bun"

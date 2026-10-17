@@ -1,5 +1,5 @@
 -- Dell XPS 15 9560 - desktop runs on the Intel iGPU, use `prime-run <app>` for the GTX 1050
-hl.monitor({ output = "eDP-1", mode = "preferred", position = "auto", scale = "auto" })
+hl.monitor({ output = "eDP-1", mode = "preferred", position = "auto", scale = 1 })
 
 hl.config({
     input = {
@@ -7,6 +7,7 @@ hl.config({
             natural_scroll       = true,
             tap_to_click         = true,
             disable_while_typing = true,
+            scroll_factor        = 0.2,
         },
     },
 })

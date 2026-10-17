@@ -8,6 +8,7 @@ intended for personal use i wouldn't reccomend trying them
  - Paste `/home/ickerio/.ssh/id_rsa.pub` on GitHub
  - Run `start-hyprland` from the TTY (not `Hyprland`, it skips the crash watchdog)
  - Setup Brave Sync, login to Spotify, login to Claude Code in VS Code
+ - `gh auth login`
 
 Hyprland config is Lua: shared `hypr/hyprland.lua`, plus `hypr/machines/<machine>.lua` which install.sh symlinks to `hypr/machine.lua`.
 

@@ -29,7 +29,7 @@ enable_multilib() {
 install_packages() {
     echo "Installing packages"
     sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono \
-        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher
+        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher github-cli fzf zoxide
 
     case "$MACHINE" in
         pc)
@@ -97,6 +97,7 @@ create_symlinks() {
     ln -sfn "machines/$MACHINE.lua" "$(pwd)/hypr/machine.lua"
     ln -s "$(pwd)/hypr" ~/.config/hypr
     ln -s "$(pwd)/foot" ~/.config/foot
+    ln -s "$(pwd)/git" ~/.config/git
 
     ln -s "$(pwd)/wallpaper.png" ~/wallpaper.png
     ln -s "$(pwd)/vscode/settings.json" ~/.config/"Code - OSS"/User/settings.json
