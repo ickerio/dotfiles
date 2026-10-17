@@ -28,7 +28,7 @@ enable_multilib() {
 
 install_packages() {
     echo "Installing packages"
-    sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono \
+    sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono noto-fonts \
         pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher github-cli fzf zoxide
 
     case "$MACHINE" in
@@ -87,7 +87,7 @@ configure_xps() {
 
     # Start with the GTX 1050 off, `gpu-on` / `gpu-off` aliases switch it
     sudo envycontrol -s integrated
-    ln -sfn "$(pwd)/xps/gpu.sh" ~/.bashrc.local
+    ln -sfn "$(pwd)/xps/bashrc.sh" ~/.bashrc.local
 }
 
 create_symlinks() {

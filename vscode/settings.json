@@ -20,5 +20,6 @@
     "telemetry.telemetryLevel": "off",
     "chat.titleBar.openInAgentsWindow.enabled": false,
     "chat.agentsControl.enabled": "hidden",
-    "terminal.integrated.initialHint": false
+    "terminal.integrated.initialHint": false,
+    "claudeCode.hideOnboarding": true
 }
