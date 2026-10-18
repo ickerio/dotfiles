@@ -94,7 +94,17 @@ configure_xps() {
 
     # Start with the GTX 1050 off, `gpu-on` / `gpu-off` aliases switch it
     sudo envycontrol -s integrated
-    ln -sfn "$(pwd)/xps/bashrc.sh" ~/.bashrc.local
+    link "$(pwd)/xps/bashrc.sh" ~/.bashrc.local
+}
+
+# Replaces old symlinks so this can be re-run on a home kept from a previous install,
+# but never overwrites a real file or folder
+link() {
+    if [ -e "$2" ] && [ ! -L "$2" ]; then
+        echo "Skipping $2, it's a real file. Move it and re-run to link it"
+        return
+    fi
+    ln -sfn "$1" "$2"
 }
 
 create_symlinks() {
@@ -102,12 +112,13 @@ create_symlinks() {
     mkdir -p ~/.config/"Code - OSS"/User
 
     ln -sfn "machines/$MACHINE.lua" "$(pwd)/hypr/machine.lua"
-    ln -s "$(pwd)/hypr" ~/.config/hypr
-    ln -s "$(pwd)/foot" ~/.config/foot
-    ln -s "$(pwd)/git" ~/.config/git
+    link "$(pwd)/hypr" ~/.config/hypr
+    link "$(pwd)/foot" ~/.config/foot
+    link "$(pwd)/git" ~/.config/git
 
-    ln -s "$(pwd)/wallpaper.png" ~/wallpaper.png
-    ln -s "$(pwd)/vscode/settings.json" ~/.config/"Code - OSS"/User/settings.json
+    link "$(pwd)/wallpaper.png" ~/wallpaper.png
+    link "$(pwd)/vscode/settings.json" ~/.config/"Code - OSS"/User/settings.json
+    # Arch's default .bashrc from /etc/skel is fine to replace
     ln -sf "$(pwd)/.bashrc" ~/.bashrc
 }
 
@@ -118,6 +129,11 @@ install_cairn() {
 }
 
 generate_key() {
+    # Kept in ~/.ssh across reinstalls
+    if ls ~/.ssh/id_* >/dev/null 2>&1; then
+        echo "SSH key already exists, skipping"
+        return
+    fi
     echo "Generating key"
     ssh-keygen
 }
