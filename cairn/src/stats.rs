@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::gpu::Gpu;
 use crate::sys;
 
 /// Reading the battery goes through ACPI to the embedded controller, ~15ms each time
@@ -11,11 +12,15 @@ const BATTERY_EVERY: Duration = Duration::from_secs(30);
 /// Asks the wifi driver, ~1.5ms
 const WIFI_EVERY: Duration = Duration::from_secs(5);
 
+/// Label, value, and an optional note shown smaller after it
+pub type Item = (&'static str, String, Option<String>);
+
 pub struct Stats {
     battery: Option<(PathBuf, Slow)>,
     wireless: Option<Slow>,
     mem_total: f32,
     cpu_prev: Option<(u64, u64)>,
+    gpu: Option<Gpu>,
 }
 
 /// A value that's costly to read, kept for a while between readings
@@ -52,13 +57,14 @@ impl Stats {
             wireless: wireless.then(|| Slow::new(WIFI_EVERY)),
             mem_total: memory().map_or(0.0, |m| m.1),
             cpu_prev: None,
+            gpu: Gpu::open(),
         }
     }
 
-    /// (label, value) pairs, the clock first with an empty label
-    pub fn items(&mut self) -> Vec<(&'static str, String)> {
+    /// The clock first with an empty label, then each stat
+    pub fn items(&mut self) -> Vec<Item> {
         let (hour, min) = sys::local_time();
-        let mut items = vec![("", format!("{hour:02}:{min:02}"))];
+        let mut items = vec![("", format!("{hour:02}:{min:02}"), None)];
         if let Some((path, slow)) = &mut self.battery {
             items.push((
                 "BAT",
@@ -67,29 +73,42 @@ impl Stats {
                     let charging = fs::read_to_string(path.join("status")).is_ok_and(|s| s.trim() == "Charging");
                     format!("{}{}", capacity.trim(), if charging { "+" } else { "" })
                 }),
+                None,
             ));
         }
         if let Some(slow) = &mut self.wireless {
-            items.push(("WIFI", slow.get(|| wifi().map_or("-".into(), |q| q.to_string()))));
+            items.push(("WIFI", slow.get(|| wifi().map_or("-".into(), |q| q.to_string())), None));
         }
-        items.push(("CPU", self.cpu().map_or("-".into(), |c| c.to_string())));
+        items.push(("CPU", self.cpu().map_or("-".into(), |c| c.to_string()), None));
         if let Some((used, total)) = memory() {
-            items.push(("MEM", format!("{used:.1}/{total:.1}")));
+            items.push(("MEM", format!("{used:.1}"), Some(capacity(total))));
+        }
+        if let Some(gpu) = &self.gpu {
+            items.push(("GPU", gpu.busy().map_or("-".into(), |b| b.to_string()), None));
+            match gpu.memory() {
+                Some((used, total)) => items.push(("VRAM", format!("{used:.1}"), Some(capacity(total)))),
+                None => items.push(("VRAM", "-".into(), None)),
+            }
         }
         items
     }
 
     /// The longest values each item can show, used to size the text once so it doesn't jump around
-    pub fn widest(&self) -> Vec<(&'static str, String)> {
-        let mut items = vec![("", "00:00".into())];
+    pub fn widest(&self) -> Vec<Item> {
+        let mut items = vec![("", "00:00".into(), None)];
         if self.battery.is_some() {
-            items.push(("BAT", "100+".into()));
+            items.push(("BAT", "100+".into(), None));
         }
         if self.wireless.is_some() {
-            items.push(("WIFI", "100".into()));
+            items.push(("WIFI", "100".into(), None));
         }
-        items.push(("CPU", "100".into()));
-        items.push(("MEM", format!("{0:.1}/{0:.1}", self.mem_total)));
+        items.push(("CPU", "100".into(), None));
+        items.push(("MEM", format!("{:.1}", self.mem_total), Some(capacity(self.mem_total))));
+        if let Some(gpu) = &self.gpu {
+            let total = gpu.memory().map_or(0.0, |m| m.1);
+            items.push(("GPU", "100".into(), None));
+            items.push(("VRAM", format!("{total:.1}"), Some(capacity(total))));
+        }
         items
     }
 
@@ -100,6 +119,11 @@ impl Stats {
         let busy = total.saturating_sub(idle.saturating_sub(prev_idle));
         Some(if total == 0 { 0 } else { (busy * 100 / total) as u32 })
     }
+}
+
+/// Total memory as a whole number of GiB in brackets, e.g. "(16)"
+fn capacity(total: f32) -> String {
+    format!("({})", total.round())
 }
 
 /// (idle, total) jiffies across all CPUs

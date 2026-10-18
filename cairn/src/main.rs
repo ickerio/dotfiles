@@ -1,8 +1,9 @@
-//! cairn: battery, wifi, CPU, memory and the time, written quietly onto the desktop in the sky left
+//! cairn: battery, wifi, CPU, memory, the NVIDIA GPU and the time, written quietly onto the desktop in the sky left
 //! of the wallpaper's mountain. No dependencies, Wayland is spoken directly over its socket, so it
 //! works on any compositor with wlr-layer-shell (Hyprland, niri, sway).
 
 mod font;
+mod gpu;
 mod stats;
 mod sys;
 mod wayland;
@@ -13,7 +14,7 @@ use std::process::exit;
 use std::time::{Duration, Instant};
 
 use font::Size;
-use stats::Stats;
+use stats::{Item, Stats};
 use sys::{Map, PollFd, POLLIN};
 use wayland::{Arg, Conn, Event, DISPLAY};
 
@@ -31,8 +32,8 @@ const LABEL_COLS: usize = 5;
 const LABEL: u8 = 130;
 const VALUE: u8 = 230;
 
-/// Font size, and runs of text with their grey
-type Line = (Size, Vec<(String, u8)>);
+/// Runs of text, each with its font size and grey, sharing a baseline
+type Line = Vec<(Size, String, u8)>;
 
 fn main() {
     let stats = Stats::new();
@@ -274,19 +275,20 @@ impl Desktop {
         let px = &mut pixels.map.pixels()[(i as i32 * w * h) as usize..][..(w * h) as usize];
         let mut y = 0;
         for (n, line) in self.text.iter().enumerate() {
-            let font = line.0.font();
+            let (height, baseline) = line_metrics(line);
             if pixels.buffers[i].shown.get(n) != Some(line) {
-                px[(y * w) as usize..((y + font.height) * w) as usize].fill(0);
+                px[(y * w) as usize..((y + height) * w) as usize].fill(0);
                 let mut x = 0;
-                for (s, grey) in &line.1 {
+                for (size, s, grey) in line {
+                    let font = size.font();
                     for c in s.chars() {
-                        font.draw(px, w, x, y, c, *grey);
+                        font.draw(px, w, x, y + baseline - font.baseline, c, *grey);
                         x += font.advance;
                     }
                 }
-                self.conn.send(surface, 2, &[Arg::Int(0), Arg::Int(y), Arg::Int(w), Arg::Int(font.height)]);
+                self.conn.send(surface, 2, &[Arg::Int(0), Arg::Int(y), Arg::Int(w), Arg::Int(height)]);
             }
-            y += font.height + LINE_GAP;
+            y += height + LINE_GAP;
         }
 
         self.conn.send(surface, 1, &[Arg::Obj(pixels.buffers[i].id), Arg::Int(0), Arg::Int(0)]);
@@ -306,24 +308,35 @@ fn bind(conn: &mut Conn, registry: u32, globals: &[(u32, String, u32)], interfac
     Ok(id)
 }
 
-/// The clock big on its own line, then a line per stat with its label
-fn layout(items: &[(&str, String)]) -> Vec<Line> {
+/// The clock big on its own line, then a line per stat with its label, and any note small after a space
+fn layout(items: &[Item]) -> Vec<Line> {
     items
         .iter()
-        .map(|(label, value)| {
+        .map(|(label, value, note)| {
             if label.is_empty() {
-                (Size::Clock, vec![(value.clone(), VALUE)])
-            } else {
-                (Size::Text, vec![(format!("{label:LABEL_COLS$}"), LABEL), (value.clone(), VALUE)])
+                return vec![(Size::Clock, value.clone(), VALUE)];
             }
+            let mut line = vec![(Size::Text, format!("{label:LABEL_COLS$}"), LABEL), (Size::Text, value.clone(), VALUE)];
+            if let Some(note) = note {
+                line.push((Size::Text, " ".into(), VALUE));
+                line.push((Size::Small, note.clone(), LABEL));
+            }
+            line
         })
         .collect()
 }
 
+/// Height of a line and how far down its baseline sits, so smaller runs sit on the same baseline
+fn line_metrics(line: &Line) -> (i32, i32) {
+    let baseline = line.iter().map(|(size, ..)| size.font().baseline).max().unwrap_or(0);
+    let height = line.iter().map(|(size, ..)| baseline - size.font().baseline + size.font().height).max().unwrap_or(0);
+    (height, baseline)
+}
+
 /// Width and height in pixels
 fn text_size(lines: &[Line]) -> (i32, i32) {
-    let width = |(size, runs): &Line| runs.iter().map(|(s, _)| s.chars().count()).sum::<usize>() as i32 * size.font().advance;
+    let width = |line: &Line| line.iter().map(|(size, s, _)| s.chars().count() as i32 * size.font().advance).sum::<i32>();
     let w = lines.iter().map(width).max().unwrap_or(0);
-    let h = lines.iter().map(|(size, _)| size.font().height + LINE_GAP).sum::<i32>() - LINE_GAP;
+    let h = lines.iter().map(|line| line_metrics(line).0 + LINE_GAP).sum::<i32>() - LINE_GAP;
     (w, h)
 }

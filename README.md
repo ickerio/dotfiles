@@ -27,7 +27,7 @@ sudo mount -o subvolid=5 /dev/nvme0n1p2 /mnt && sudo btrfs subvolume delete -R /
 ```
 
 ## cairn
-[cairn](cairn/src/main.rs) draws battery, wifi, CPU, memory and clock on the desktop. Run `cairn/glyphs.sh` after changing fonts.
+[cairn](cairn/src/main.rs) draws battery, wifi, CPU, memory, NVIDIA GPU and clock on the desktop. Run `cairn/glyphs.sh` after changing fonts.
 
 ## XPS
 UEFI (`F2`, [wiki](https://wiki.archlinux.org/title/Dell_XPS_15_(9560))): SATA RAID -> AHCI, Fastboot -> Thorough, Secure Boot off

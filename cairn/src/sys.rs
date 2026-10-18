@@ -56,6 +56,8 @@ extern "C" {
     fn localtime_r(time: *const i64, tm: *mut Tm) -> *mut Tm;
     fn mmap(addr: *mut c_void, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: i64) -> *mut c_void;
     fn munmap(addr: *mut c_void, len: usize) -> c_int;
+    fn dlopen(file: *const c_char, mode: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
 }
 
 pub fn poll_fds(fds: &mut [PollFd], timeout_ms: i32) -> io::Result<()> {
@@ -137,6 +139,19 @@ pub fn send_with_fd(sock: RawFd, data: &[u8], fd: RawFd) -> io::Result<()> {
         return Err(io::Error::other("short write on wayland socket"));
     }
     Ok(())
+}
+
+/// A shared library loaded for the life of the process, None if it isn't installed
+pub fn dlopen_lib(name: &CStr) -> Option<*mut c_void> {
+    const RTLD_NOW: c_int = 2;
+    let lib = unsafe { dlopen(name.as_ptr(), RTLD_NOW) };
+    (!lib.is_null()).then_some(lib)
+}
+
+/// The address of `name` in `lib`, to be transmuted to its function type
+pub fn dlsym_fn(lib: *mut c_void, name: &CStr) -> Option<*mut c_void> {
+    let sym = unsafe { dlsym(lib, name.as_ptr()) };
+    (!sym.is_null()).then_some(sym)
 }
 
 /// Local (hour, minute), following the system timezone

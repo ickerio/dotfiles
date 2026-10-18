@@ -2,17 +2,20 @@
 
 use std::sync::LazyLock;
 
-/// The characters in each strip, in order. Keep these in step with glyphs.sh
+/// The characters in each strip, in order, each starting with 0. Keep these in step with glyphs.sh
 const CLOCK_CHARS: &str = "0123456789:";
-const TEXT_CHARS: &str = "0123456789:./+-ABCEFIMPTUW";
+const TEXT_CHARS: &str = "0123456789:./+-ABCEFGIMPRTUVW";
+const SMALL_CHARS: &str = "0123456789()";
 
 static CLOCK: LazyLock<Font> = LazyLock::new(|| Font::new(CLOCK_CHARS, include_bytes!("glyphs/clock.pgm")));
 static TEXT: LazyLock<Font> = LazyLock::new(|| Font::new(TEXT_CHARS, include_bytes!("glyphs/text.pgm")));
+static SMALL: LazyLock<Font> = LazyLock::new(|| Font::new(SMALL_CHARS, include_bytes!("glyphs/small.pgm")));
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Size {
     Clock,
     Text,
+    Small,
 }
 
 impl Size {
@@ -20,6 +23,7 @@ impl Size {
         match self {
             Size::Clock => &CLOCK,
             Size::Text => &TEXT,
+            Size::Small => &SMALL,
         }
     }
 }
@@ -32,6 +36,8 @@ pub struct Font {
     width: i32,
     pub advance: i32,
     pub height: i32,
+    /// Rows from the top to the bottom of the digits
+    pub baseline: i32,
 }
 
 impl Font {
@@ -50,7 +56,11 @@ impl Font {
             *field = std::str::from_utf8(&pgm[start..pos]).ok().and_then(|f| f.parse().ok()).unwrap_or(0);
         }
         let [_, width, height, _] = fields;
-        Font { chars, pixels: &pgm[pos + 1..], width, advance: width / chars.chars().count() as i32, height }
+        let (pixels, advance) = (&pgm[pos + 1..], width / chars.chars().count() as i32);
+        // Every strip starts with "0", whose lowest inked row is the baseline
+        let inked = |row: i32| pixels[(row * width) as usize..][..advance as usize].iter().any(|&p| p < 128);
+        let baseline = (0..height).rev().find(|&row| inked(row)).map_or(height, |row| row + 1);
+        Font { chars, pixels, width, advance, height, baseline }
     }
 
     /// Draws `c` with its top left at (x, y) into `px`, premultiplied ARGB `w` pixels wide, in `grey`.
