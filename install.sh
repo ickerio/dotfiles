@@ -29,7 +29,7 @@ enable_multilib() {
 install_packages() {
     echo "Installing packages"
     sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono noto-fonts \
-        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher github-cli fzf zoxide rust
+        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher fzf zoxide rust
 
     case "$MACHINE" in
         pc)
