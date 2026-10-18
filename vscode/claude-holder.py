@@ -7,9 +7,10 @@
 #
 # The holder owns claude's pipes, so the extension host dying only cuts it off from the
 # extension. Idle when that happens: claude is stopped like normal (--resume starts it again).
-# Mid-turn: the turn runs on, requests meant for the extension (permission prompts, IDE tools)
-# wait, and when a window reopens the session its --resume front attaches to the running
-# claude instead. The panel loads the transcript, then gets the live stream and waiting prompts.
+# Mid-turn, or with background tasks (agents, shells) still going: it all runs on, requests meant
+# for the extension (permission prompts, IDE tools) wait, and when a window reopens the session
+# its --resume front attaches to the running claude instead. The panel loads the transcript, then
+# gets the live stream and waiting prompts.
 import io
 import json
 import os
@@ -34,6 +35,8 @@ SILENT = 30 * 60
 USER = re.compile(rb'"type":\s*"user"')
 RESULT = re.compile(rb'"type":\s*"result"')
 CONTROL = re.compile(rb'"type":\s*"control_')
+SYSTEM = re.compile(rb'"type":\s*"system"')
+TASK_DONE = ("completed", "failed", "killed")
 DENY = "VS Code disconnected while this was running. Stop here and wait for the user to come back."
 
 
@@ -108,6 +111,7 @@ class Holder:
         self.write = None  # to the attached extension, None while detached
         self.close = None
         self.busy = False
+        self.tasks = set()  # background tasks claude has running
         self.stdin_open = True
         self.detached_at = None
         self.last_output = time.monotonic()
@@ -197,8 +201,11 @@ class Holder:
             except OSError:
                 pass
             self.detached_at = time.monotonic()
-        log(f"detached ({why}), {'busy, keeping claude running' if self.busy else 'idle, stopping claude'}")
-        if not self.busy:
+        if self.busy or self.tasks:
+            log(f"detached ({why}), {'busy' if self.busy else 'idle'} with {len(self.tasks)} tasks, "
+                "keeping claude running")
+        else:
+            log(f"detached ({why}), idle, stopping claude")
             self.stop_claude()
 
     def attach_fds(self, life_fd):
@@ -226,11 +233,11 @@ class Holder:
         while True:
             conn, _ = self.server.accept()
             with self.out_lock:
-                # Worth attaching to: a turn that's still running, or a claude whose window is
-                # reloading and hasn't let go yet (refusing that would start a second claude
-                # on the same session)
+                # Worth attaching to: a turn or background task that's still running, or a claude
+                # whose window is reloading and hasn't let go yet (refusing that would start a
+                # second claude on the same session)
                 taking_over = self.write is not None
-                ok = self.stdin_open and (self.busy or taking_over)
+                ok = self.stdin_open and (self.busy or self.tasks or taking_over)
                 if ok:
                     try:
                         conn.sendall(b"ok\n")
@@ -288,12 +295,17 @@ class Holder:
         for line in iter(self.out.readline, b""):
             self.last_output = time.monotonic()
             msg = None
-            if CONTROL.search(line, 0, 100) or RESULT.search(line, 0, 100) \
+            if CONTROL.search(line, 0, 100) or RESULT.search(line, 0, 100) or SYSTEM.search(line, 0, 100) \
                     or (not self.session and b'"session_id"' in line):
                 msg = parse(line)
             if msg is not None:
-                if not self.session and msg.get("session_id"):
-                    self.session = msg["session_id"]
+                # Not just the first one: /clear carries on in the same claude under a new id,
+                # and that's the id the next window will --resume
+                session = msg.get("session_id")
+                if session and session != self.session:
+                    if self.session:
+                        log(f"session now {session}")
+                    self.session = session
                     self.register()
                 kind = msg.get("type")
                 if kind == "control_request":
@@ -307,11 +319,24 @@ class Holder:
                     response = msg.get("response") or {}
                     if self.init_id and response.get("request_id") == self.init_id:
                         self.init_response = response
+                elif kind == "system":
+                    subtype = msg.get("subtype")
+                    if subtype == "task_started":
+                        self.tasks.add(msg.get("task_id"))
+                    elif subtype == "task_notification":
+                        self.tasks.discard(msg.get("task_id"))
+                        # claude takes a turn on what the task came back with, ending in a result
+                        self.busy = True
+                    elif subtype == "task_updated" and (msg.get("patch") or {}).get("status") in TASK_DONE:
+                        self.tasks.discard(msg.get("task_id"))
                 elif kind == "result":
                     self.busy = False
                     if self.write is None:
-                        log("turn finished while detached, stopping claude")
-                        self.stop_claude()
+                        if self.tasks:
+                            log(f"turn finished while detached, waiting on {len(self.tasks)} tasks")
+                        else:
+                            log("turn finished while detached, stopping claude")
+                            self.stop_claude()
             self.to_extension(line)
 
     def claude_stderr(self):
@@ -339,7 +364,8 @@ class Holder:
                 for line in list(self.pending.values()):
                     self.answer(parse(line) or {})
                 self.pending.clear()
-            if self.busy and not self.pending and now - self.last_output > SILENT:
+            # Background tasks can be quiet for hours (a training run, say): they end it themselves
+            if self.busy and not self.tasks and not self.pending and now - self.last_output > SILENT:
                 log("busy but silent while detached, stopping claude")
                 self.stop_claude()
 
