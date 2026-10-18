@@ -1,2 +1,3 @@
 anthropic.claude-code
 svelte.svelte-vscode
+jeanp413.open-remote-ssh

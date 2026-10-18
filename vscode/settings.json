@@ -23,5 +23,10 @@
     "terminal.integrated.initialHint": false,
     "claudeCode.hideOnboarding": true,
     "chat.disableAIFeatures": true,
-    "chat.commandCenter.enabled": false
+    "chat.commandCenter.enabled": false,
+    // open-remote-ssh on Code - OSS: there's no matching server, so use the latest VSCodium one
+    "remote.SSH.serverBinaryName": "codium-server",
+    "remote.SSH.serverDownloadUrlTemplate": "https://github.com/VSCodium/vscodium/releases/download/${version}${release}/vscodium-reh-${os}-${arch}-${version}${release}.tar.gz",
+    "remote.SSH.serverVersion": "latest",
+    "remote.SSH.serverValidation": "force"
 }

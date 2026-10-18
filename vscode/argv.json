@@ -1,0 +1,5 @@
+{
+    "enable-crash-reporter": false,
+    // open-remote-ssh needs proposed APIs that only VSCodium enables by default
+    "enable-proposed-api": ["jeanp413.open-remote-ssh"]
+}

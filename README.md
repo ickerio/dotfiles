@@ -3,7 +3,9 @@
 ## Setup
  - `./install.sh` (`--xps` on the laptop), safe to re-run
  - Add `~/.ssh/id_ed25519.pub` to GitHub
- - `sudo tailscale up`
+ - `sudo tailscale up`, with `--ssh` on the PC so it takes the laptop's SSH in place of sshd
+ - VS Code `Remote-SSH: Connect to Host...` -> `desktop` opens the PC from the laptop
+ - `mdesk` moshes into a tmux session on the PC (`Ctrl+B D` detaches, training keeps running)
  - `start-hyprland` from the TTY (not `Hyprland`, it skips the crash watchdog)
  - Log in to Brave Sync, Spotify, Claude Code
 

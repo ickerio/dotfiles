@@ -29,7 +29,8 @@ enable_multilib() {
 install_packages() {
     echo "Installing packages"
     sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono noto-fonts \
-        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher fzf zoxide rust tailscale
+        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher fzf zoxide rust tailscale \
+        mosh tmux
 
     case "$MACHINE" in
         pc)
@@ -70,6 +71,9 @@ install_vscode_extensions() {
     while read -r extension; do
         code --install-extension "$extension"
     done < vscode/extensions.txt
+    # Copied, not symlinked, since VS Code writes a crash reporter id into it
+    mkdir -p ~/.vscode-oss
+    cp -n vscode/argv.json ~/.vscode-oss/argv.json
 }
 
 create_udev_rules() {
@@ -81,6 +85,7 @@ create_udev_rules() {
 
 enable_tailscale() {
     # Login lives in /var/lib/tailscale, which a reinstall wipes, so `sudo tailscale up` again after
+    # (`--ssh` on the PC, which serves Remote-SSH and mosh instead of sshd)
     sudo systemctl enable --now tailscaled.service
 }
 
@@ -120,6 +125,7 @@ create_symlinks() {
     link "$(pwd)/hypr" ~/.config/hypr
     link "$(pwd)/foot" ~/.config/foot
     link "$(pwd)/git" ~/.config/git
+    link "$(pwd)/tmux" ~/.config/tmux
 
     link "$(pwd)/wallpaper.png" ~/wallpaper.png
     link "$(pwd)/vscode/settings.json" ~/.config/"Code - OSS"/User/settings.json
@@ -162,4 +168,4 @@ create_symlinks
 install_cairn
 generate_key
 
-echo "Done. Reboot before running start-hyprland, the new GPU driver only loads on boot"
+echo "Done. Reboot before running start-hyprland"

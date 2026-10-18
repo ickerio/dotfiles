@@ -12,6 +12,14 @@ hl.config({
     },
 })
 
+-- 0.2 above is tuned for the browser, but it makes terminals (tmux, Claude Code) crawl
+hl.window_rule({
+    name  = "terminal-scroll",
+    match = { class = "^(foot|footclient)$" },
+
+    scroll_touchpad = 1.0,
+})
+
 hl.gesture({ fingers = 3, direction = "horizontal", action = "workspace" })
 
 -- Brightness
