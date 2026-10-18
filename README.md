@@ -1,5 +1,10 @@
 # dotfiles
 
+## Layout
+ - `config/*` is symlinked to `~/.config/*`, `bash/bashrc` to `~/.bashrc`
+ - `machines/<pc|xps>/` holds everything machine specific (picked by `--xps`)
+ - `udev/` rules are copied to `/etc/udev/rules.d`
+
 ## Setup
  - `./install.sh` (`--xps` on the laptop), safe to re-run
  - Add `~/.ssh/id_ed25519.pub` to GitHub

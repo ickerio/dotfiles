@@ -1,4 +1,4 @@
--- Machine specific config, symlinked by install.sh to machines/<machine>.lua
+-- Machine specific config, symlinked by install.sh to machines/<machine>/hypr.lua
 require("machine")
 
 hl.on("hyprland.start", function()

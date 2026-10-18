@@ -68,17 +68,17 @@ install_aur_packages() {
 
 install_vscode_extensions() {
     echo "Installing VS Code extensions"
-    while read -r extension; do
+    # Plus the machine's own list, if it has one
+    cat vscode/extensions.txt "machines/$MACHINE/vscode-extensions.txt" 2>/dev/null | while read -r extension; do
         code --install-extension "$extension"
-    done < vscode/extensions.txt
+    done
     # Copied, not symlinked, since VS Code writes a crash reporter id into it
     mkdir -p ~/.vscode-oss
     cp -n vscode/argv.json ~/.vscode-oss/argv.json
 }
 
 create_udev_rules() {
-    sudo cp peripherals/70-wooting.rules /etc/udev/rules.d/
-    sudo cp peripherals/70-finalmouse.rules /etc/udev/rules.d/
+    sudo cp udev/*.rules /etc/udev/rules.d/
     sudo rm -f /etc/udev/rules.d/99-finalmouse.rules
     sudo udevadm control --reload-rules && sudo udevadm trigger
 }
@@ -98,13 +98,12 @@ configure_pc() {
 
 configure_xps() {
     echo "Configuring XPS 15 9560"
-    sudo cp xps/blacklist.conf /etc/modprobe.d/xps.conf
+    sudo cp machines/xps/blacklist.conf /etc/modprobe.d/xps.conf
     sudo mkinitcpio -P
     sudo systemctl enable thermald.service power-profiles-daemon.service bluetooth.service
 
     # Start with the GTX 1050 off, `gpu-on` / `gpu-off` aliases switch it
     sudo envycontrol -s integrated
-    link "$(pwd)/xps/bashrc.sh" ~/.bashrc.local
 }
 
 # Replaces old symlinks so this can be re-run on a home kept from a previous install,
@@ -121,16 +120,17 @@ create_symlinks() {
     echo "Symlinking config files"
     mkdir -p ~/.config/"Code - OSS"/User
 
-    ln -sfn "machines/$MACHINE.lua" "$(pwd)/hypr/machine.lua"
-    link "$(pwd)/hypr" ~/.config/hypr
-    link "$(pwd)/foot" ~/.config/foot
-    link "$(pwd)/git" ~/.config/git
-    link "$(pwd)/tmux" ~/.config/tmux
+    for dir in config/*; do
+        link "$(pwd)/$dir" ~/.config/"$(basename "$dir")"
+    done
+    ln -sfn "../../machines/$MACHINE/hypr.lua" config/hypr/machine.lua
+    # Wallpaper moved into config/hypr
+    [ -L ~/wallpaper.png ] && rm ~/wallpaper.png
 
-    link "$(pwd)/wallpaper.png" ~/wallpaper.png
     link "$(pwd)/vscode/settings.json" ~/.config/"Code - OSS"/User/settings.json
     # Arch's default .bashrc from /etc/skel is fine to replace
-    ln -sf "$(pwd)/.bashrc" ~/.bashrc
+    ln -sf "$(pwd)/bash/bashrc" ~/.bashrc
+    link "$(pwd)/machines/$MACHINE/bashrc.sh" ~/.bashrc.local
 }
 
 install_cairn() {
