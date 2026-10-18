@@ -79,6 +79,13 @@ create_udev_rules() {
     sudo udevadm control --reload-rules && sudo udevadm trigger
 }
 
+configure_pc() {
+    echo "Configuring desktop PC (NVIDIA)"
+    # The kms hook bakes nouveau into the initramfs, so it grabs the GPU before nvidia can
+    sudo sed -i '/^HOOKS=/ s/ kms\b//' /etc/mkinitcpio.conf
+    sudo mkinitcpio -P
+}
+
 configure_xps() {
     echo "Configuring XPS 15 9560"
     sudo cp xps/blacklist.conf /etc/modprobe.d/xps.conf
@@ -123,9 +130,14 @@ install_yay
 install_aur_packages
 install_vscode_extensions
 create_udev_rules
+if [ "$MACHINE" = pc ]; then
+    configure_pc
+fi
 if [ "$MACHINE" = xps ]; then
     configure_xps
 fi
 create_symlinks
 install_cairn
 generate_key
+
+echo "Done. Reboot before running start-hyprland, the new GPU driver only loads on boot"
