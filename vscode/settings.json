@@ -28,5 +28,6 @@
     "remote.SSH.serverBinaryName": "codium-server",
     "remote.SSH.serverDownloadUrlTemplate": "https://github.com/VSCodium/vscodium/releases/download/${version}${release}/vscodium-reh-${os}-${arch}-${version}${release}.tar.gz",
     "remote.SSH.serverVersion": "latest",
-    "remote.SSH.serverValidation": "force"
+    "remote.SSH.serverValidation": "force",
+    "workbench.startupEditor": "none"
 }
