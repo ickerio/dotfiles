@@ -20,6 +20,9 @@ command -v fzf >/dev/null && eval "$(fzf --bash)"
 # `z <part of folder name>` jumps to frequently used folders
 command -v zoxide >/dev/null && eval "$(zoxide init bash)"
 
+# Tools that install themselves to ~/.local/bin (Claude Code etc)
+export PATH="$HOME/.local/bin:$PATH"
+
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
