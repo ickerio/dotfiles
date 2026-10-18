@@ -29,7 +29,7 @@ enable_multilib() {
 install_packages() {
     echo "Installing packages"
     sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono noto-fonts \
-        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher fzf zoxide rust
+        pipewire-pulse wireplumber playerctl code unzip docker bun prismlauncher fzf zoxide rust tailscale
 
     case "$MACHINE" in
         pc)
@@ -77,6 +77,11 @@ create_udev_rules() {
     sudo cp peripherals/70-finalmouse.rules /etc/udev/rules.d/
     sudo rm -f /etc/udev/rules.d/99-finalmouse.rules
     sudo udevadm control --reload-rules && sudo udevadm trigger
+}
+
+enable_tailscale() {
+    # Login lives in /var/lib/tailscale, which a reinstall wipes, so `sudo tailscale up` again after
+    sudo systemctl enable --now tailscaled.service
 }
 
 configure_pc() {
@@ -146,6 +151,7 @@ install_yay
 install_aur_packages
 install_vscode_extensions
 create_udev_rules
+enable_tailscale
 if [ "$MACHINE" = pc ]; then
     configure_pc
 fi

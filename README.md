@@ -3,6 +3,7 @@
 ## Setup
  - `./install.sh` (`--xps` on the laptop), safe to re-run
  - Add `~/.ssh/id_ed25519.pub` to GitHub
+ - `sudo tailscale up`
  - `start-hyprland` from the TTY (not `Hyprland`, it skips the crash watchdog)
  - Log in to Brave Sync, Spotify, Claude Code
 
