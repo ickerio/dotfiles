@@ -11,11 +11,6 @@ alias grep='grep --color=auto'
 # Prompt: machine name and folder
 PS1='\[\e[1;32m\]\h\[\e[0m\] \[\e[1;34m\]\w\[\e[0m\] '
 
-# Ctrl+R history search, Ctrl+T file picker, Alt+C cd into folder
-command -v fzf >/dev/null && eval "$(fzf --bash)"
-# `z <part of folder name>` jumps to frequently used folders
-command -v zoxide >/dev/null && eval "$(zoxide init bash)"
-
 # Tools that install themselves to ~/.local/bin (Claude Code etc)
 export PATH="$HOME/.local/bin:$PATH"
 

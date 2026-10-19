@@ -74,6 +74,9 @@ hl.bind(mainMod .. " + S", hl.dsp.exec_cmd("spotify-launcher"))
 hl.bind(mainMod .. " + D", hl.dsp.exec_cmd("footclient"))
 hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("prismlauncher"))
 
+hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("grim -g \"$(slurp)\" - | wl-copy"))
+hl.bind("Print",                   hl.dsp.exec_cmd("grim - | wl-copy"))
+
 -- Move focus with mainMod + arrow keys
 hl.bind(mainMod .. " + left",  hl.dsp.focus({ direction = "left" }))
 hl.bind(mainMod .. " + right", hl.dsp.focus({ direction = "right" }))
