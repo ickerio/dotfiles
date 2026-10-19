@@ -16,12 +16,10 @@
     "workbench.tree.indent": 16,
     "explorer.confirmDragAndDrop": false,
     "extensions.ignoreRecommendations": true,
-    "claudeCode.preferredLocation": "panel",
     "telemetry.telemetryLevel": "off",
     "chat.titleBar.openInAgentsWindow.enabled": false,
     "chat.agentsControl.enabled": "hidden",
     "terminal.integrated.initialHint": false,
-    "claudeCode.hideOnboarding": true,
     "chat.disableAIFeatures": true,
     "chat.commandCenter.enabled": false,
     // open-remote-ssh (laptop only) on Code - OSS: there's no matching server, so use the latest VSCodium one

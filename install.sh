@@ -131,13 +131,6 @@ create_symlinks() {
     # Arch's default .bashrc from /etc/skel is fine to replace
     ln -sf "$(pwd)/bash/bashrc" ~/.bashrc
     link "$(pwd)/machines/$MACHINE/bashrc.sh" ~/.bashrc.local
-
-    if [ "$MACHINE" = pc ]; then
-        # Remote dev from the laptop, see vscode/claude-holder.py
-        mkdir -p ~/.local/bin ~/.vscodium-server/data/Machine
-        link "$(pwd)/vscode/claude-holder.py" ~/.local/bin/claude-holder
-        link "$(pwd)/vscode/machine-settings.json" ~/.vscodium-server/data/Machine/settings.json
-    fi
 }
 
 install_cairn() {

@@ -1,5 +1,0 @@
-{
-    // Remote settings on the PC (open-remote-ssh from the laptop)
-    // Keeps the Claude panel's turns running through window quits and reloads
-    "claudeCode.claudeProcessWrapper": "/home/harry/.local/bin/claude-holder"
-}
