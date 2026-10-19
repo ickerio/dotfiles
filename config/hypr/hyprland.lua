@@ -27,7 +27,7 @@ hl.config({
 
     general = {
         gaps_in     = 3,
-        gaps_out    = 0,
+        gaps_out    = 6,
         border_size = 0,
         layout      = "dwindle",
     },
@@ -55,9 +55,13 @@ hl.config({
     },
 })
 
-hl.curve("myBezier", { type = "bezier", points = { {0.05, 0.9}, {0.1, 1} } })
+-- No gaps or rounding when a window is alone on its workspace (or maximised)
+hl.workspace_rule({ workspace = "w[tv1]", gaps_out = 0, gaps_in = 0 })
+hl.workspace_rule({ workspace = "f[1]",   gaps_out = 0, gaps_in = 0 })
+hl.window_rule({ name = "no-gaps-wtv1", match = { float = false, workspace = "w[tv1]" }, rounding = 0 })
+hl.window_rule({ name = "no-gaps-f1",   match = { float = false, workspace = "f[1]" },   rounding = 0 })
 
-hl.animation({ leaf = "windows",     enabled = true, speed = 7,  bezier = "myBezier" })
+hl.animation({ leaf = "windows",     enabled = true, speed = 7,  bezier = "default"  })
 hl.animation({ leaf = "windowsOut",  enabled = true, speed = 7,  bezier = "default", style = "popin 80%" })
 hl.animation({ leaf = "workspaces",  enabled = false })
 
