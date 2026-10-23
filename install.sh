@@ -46,9 +46,14 @@ install_packages() {
 }
 
 install_yay() {
+    if command -v yay >/dev/null; then
+        echo "yay already installed, skipping"
+        return
+    fi
     echo "Installing yay"
     sudo pacman -S --needed git base-devel
     # yay-bin is prebuilt, plain yay compiles from source
+    rm -rf yay-bin
     git clone https://aur.archlinux.org/yay-bin.git
     cd yay-bin
     makepkg -si
@@ -98,12 +103,15 @@ configure_pc() {
 
 configure_xps() {
     echo "Configuring XPS 15 9560"
+    # Start with the GTX 1050 off, `gpu-on` / `gpu-off` aliases switch it. Only on a fresh
+    # system (no xps.conf yet), so a re-run doesn't undo `gpu-on`
+    if [ ! -e /etc/modprobe.d/xps.conf ]; then
+        sudo envycontrol -s integrated
+    fi
+
     sudo cp machines/xps/blacklist.conf /etc/modprobe.d/xps.conf
     sudo mkinitcpio -P
     sudo systemctl enable thermald.service power-profiles-daemon.service bluetooth.service
-
-    # Start with the GTX 1050 off, `gpu-on` / `gpu-off` aliases switch it
-    sudo envycontrol -s integrated
 }
 
 # Replaces old symlinks so this can be re-run on a home kept from a previous install,

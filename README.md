@@ -13,6 +13,7 @@
 ## Keys
  - `SUPER` + `Q` close, `Backspace` exit, `V` float, `F` fullscreen
  - `SUPER` + `D` foot, `W` brave, `C` code, `S` spotify, `M` prism, `G` steam (XPS)
+ - `SUPER` + `SHIFT` + `S` region screenshot, `Print` full
  - `SUPER` + `1-0` workspace, `SHIFT` to move, drag/`SHIFT` drag to move/resize
 
 ## Reinstall
