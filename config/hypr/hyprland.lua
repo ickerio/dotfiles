@@ -67,6 +67,7 @@ hl.bind(mainMod .. " + Q",         hl.dsp.window.close())
 hl.bind(mainMod .. " + backspace", hl.dsp.exit())
 hl.bind(mainMod .. " + V",         hl.dsp.window.float({ action = "toggle" }))
 hl.bind(mainMod .. " + F",         hl.dsp.window.fullscreen({ action = "toggle" }))
+hl.bind(mainMod .. " + E",         hl.dsp.layout("togglesplit"))
 
 hl.bind(mainMod .. " + W", hl.dsp.exec_cmd("brave"))
 hl.bind(mainMod .. " + C", hl.dsp.exec_cmd("code --enable-features=UseOzonePlatform,WaylandWindowDecorations --ozone-platform-hint=auto"))
