@@ -83,6 +83,36 @@ hl.bind(mainMod .. " + right", hl.dsp.focus({ direction = "right" }))
 hl.bind(mainMod .. " + up",    hl.dsp.focus({ direction = "up" }))
 hl.bind(mainMod .. " + down",  hl.dsp.focus({ direction = "down" }))
 
+-- Cycle focus through windows on the current workspace with ALT + Tab
+hl.bind("ALT + Tab", hl.dsp.window.cycle_next())
+
+-- Cycle focus through windows on every workspace with mainMod + Tab
+local function cycle_all_windows()
+    local windows = {}
+    for _, w in ipairs(hl.get_windows({ mapped = true })) do
+        if not w.hidden and w.workspace and w.workspace.id > 0 then -- skip special workspaces
+            windows[#windows + 1] = w
+        end
+    end
+    if #windows == 0 then return end
+
+    table.sort(windows, function(a, b)
+        if a.workspace.id ~= b.workspace.id then return a.workspace.id < b.workspace.id end
+        return a.stable_id < b.stable_id
+    end)
+
+    local next_window = windows[1]
+    for i, w in ipairs(windows) do
+        if w.active then
+            next_window = windows[i % #windows + 1]
+            break
+        end
+    end
+    hl.dispatch(hl.dsp.focus({ window = next_window }))
+end
+
+hl.bind(mainMod .. " + Tab", cycle_all_windows)
+
 -- Switch workspaces with mainMod + [0-9]
 -- Move active window to a workspace with mainMod + SHIFT + [0-9]
 for i = 1, 10 do
