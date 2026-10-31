@@ -4,7 +4,7 @@
  - `./install.sh [--xps]`
  - `sudo tailscale up [--ssh]`
  - `start-hyprland`
- - `mdesk`, `Ctrl+B D`
+ - `mdesk [session]`, `Ctrl+B D`
  - `claude`, `/remote-control`
  - `cairn/glyphs.sh`
  - PC: `aux`, `speakers`
