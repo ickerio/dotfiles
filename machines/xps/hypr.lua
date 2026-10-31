@@ -12,6 +12,13 @@ hl.config({
     },
 })
 
+-- External mouse matches the PC (flat, -0.5)
+hl.device({
+    name          = "finalmouse-ultralightx-dongle-mouse",
+    accel_profile = "flat",
+    sensitivity   = -0.5,
+})
+
 -- 0.2 above is tuned for the browser, but it makes terminals (tmux, Claude Code) crawl
 hl.window_rule({
     name  = "terminal-scroll",
