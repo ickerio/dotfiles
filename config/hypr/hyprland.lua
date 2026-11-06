@@ -74,6 +74,7 @@ hl.bind(mainMod .. " + C", hl.dsp.exec_cmd("code --enable-features=UseOzonePlatf
 hl.bind(mainMod .. " + S", hl.dsp.exec_cmd("spotify-launcher"))
 hl.bind(mainMod .. " + D", hl.dsp.exec_cmd("footclient"))
 hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("prismlauncher"))
+hl.bind(mainMod .. " + O", hl.dsp.exec_cmd("stably-orca --ozone-platform=wayland"))
 
 hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("grim -g \"$(slurp)\" - | wl-copy"))
 hl.bind("Print",                   hl.dsp.exec_cmd("grim - | wl-copy"))

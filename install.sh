@@ -63,7 +63,7 @@ install_yay() {
 
 install_aur_packages() {
     echo "Installing AUR packages"
-    yay -S --needed brave-bin
+    yay -S --needed brave-bin stably-orca-bin
 
     if [ "$MACHINE" = xps ]; then
         # GTX 1050 is Pascal, which nvidia-open doesn't support
