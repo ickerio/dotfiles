@@ -19,10 +19,10 @@ hl.device({
     sensitivity   = -0.5,
 })
 
--- 0.2 above is tuned for the browser, but it makes terminals (tmux, Claude Code) crawl
+-- 0.2 above is tuned for the browser, but it makes terminals (tmux, Claude Code, agents' hc: windows) crawl
 hl.window_rule({
     name  = "terminal-scroll",
-    match = { class = "^(foot|footclient)$" },
+    match = { class = "^(foot|footclient|hc:.*)$" },
 
     scroll_touchpad = 1.0,
 })

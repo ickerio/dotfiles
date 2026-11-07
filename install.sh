@@ -30,7 +30,7 @@ install_packages() {
     echo "Installing packages"
     sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono noto-fonts \
         pipewire-pulse wireplumber playerctl code unzip bun prismlauncher rust tailscale \
-        mosh tmux grim slurp wl-clipboard
+        mosh tmux grim slurp wl-clipboard fuzzel
 
     case "$MACHINE" in
         pc)
@@ -141,10 +141,34 @@ create_symlinks() {
     link "$(pwd)/machines/$MACHINE/bashrc.sh" ~/.bashrc.local
 }
 
-install_cairn() {
-    echo "Building cairn"
-    cargo build --release --manifest-path cairn/Cargo.toml
-    sudo install -Dm755 cairn/target/release/cairn /usr/local/bin/cairn
+install_hc() {
+    # herdr-core keeps agents' terminals alive and reports their status, lookout shows them. It updates
+    # itself with `hc update`, so only install it once
+    if command -v hc >/dev/null; then
+        echo "hc already installed, skipping"
+        return
+    fi
+    echo "Installing herdr-core (hc)"
+    curl -fsSL https://releases.herdr.dev/core/install.sh | sh
+}
+
+start_hc_at_boot() {
+    # The PC's agents run with nobody logged in, so its user services start at boot and start the core. The XPS
+    # starts its core from Hyprland (lookout), which hands agents the desktop's environment
+    echo "Starting hc at boot"
+    sudo loginctl enable-linger "$USER"
+    mkdir -p ~/.config/systemd/user
+    link "$(pwd)/machines/pc/hc.service" ~/.config/systemd/user/hc.service
+    systemctl --user daemon-reload
+    systemctl --user enable hc.service
+}
+
+install_lookout() {
+    echo "Building lookout"
+    cargo build --release --manifest-path lookout/Cargo.toml
+    sudo install -Dm755 lookout/target/release/lookout /usr/local/bin/lookout
+    # It was called cairn
+    sudo rm -f /usr/local/bin/cairn
 }
 
 generate_key() {
@@ -173,7 +197,11 @@ if [ "$MACHINE" = xps ]; then
     configure_xps
 fi
 create_symlinks
-install_cairn
+install_hc
+if [ "$MACHINE" = pc ]; then
+    start_hc_at_boot
+fi
+install_lookout
 generate_key
 
 echo "Done. Reboot before running start-hyprland"

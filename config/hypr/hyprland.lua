@@ -4,7 +4,7 @@ require("machine")
 hl.on("hyprland.start", function()
     hl.exec_cmd("hyprpaper")
     hl.exec_cmd("foot --server")
-    hl.exec_cmd("cairn")
+    hl.exec_cmd("lookout")
 end)
 
 hl.env("XCURSOR_SIZE", "24")
@@ -75,6 +75,19 @@ hl.bind(mainMod .. " + S", hl.dsp.exec_cmd("spotify-launcher"))
 hl.bind(mainMod .. " + D", hl.dsp.exec_cmd("footclient"))
 hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("prismlauncher"))
 hl.bind(mainMod .. " + O", hl.dsp.exec_cmd("stably-orca --ozone-platform=wayland"))
+
+-- Agents live in herdr-core (hc) and lookout finds them. Their windows only view them: SUPER + Q closes the
+-- window, the agent keeps going
+hl.bind(mainMod .. " + A",         hl.dsp.exec_cmd("lookout pick"))
+hl.bind(mainMod .. " + SHIFT + A", hl.dsp.exec_cmd("lookout new"))
+hl.bind(mainMod .. " + N",         hl.dsp.exec_cmd("lookout next"))
+hl.bind(mainMod .. " + CTRL + Q",  hl.dsp.exec_cmd("lookout kill"))
+
+-- Hold SUPER to peek at lookout's board over the windows. lookout waits out the hold itself (200ms), since a long
+-- press waits a whole key repeat delay. Letting go puts it back, and so does anything that moves on screen, in
+-- case a combo like SUPER + D swallows the release
+hl.bind("SUPER_L", hl.dsp.exec_cmd("lookout peek"),   { non_consuming = true, ignore_mods = true })
+hl.bind("SUPER_L", hl.dsp.exec_cmd("lookout unpeek"), { release = true, non_consuming = true, ignore_mods = true })
 
 hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("grim -g \"$(slurp)\" - | wl-copy"))
 hl.bind("Print",                   hl.dsp.exec_cmd("grim - | wl-copy"))

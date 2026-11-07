@@ -6,7 +6,8 @@
  - `start-hyprland`
  - `mdesk [session]`, `Ctrl+B D`
  - `claude`, `/remote-control`
- - `cairn/glyphs.sh`
+ - `lookout/glyphs.sh`
+ - Agents: `hc` (`hc ls`, `hc attach`), XPS once: `hc machine add desktop --name desktop`
  - PC: `aux`, `speakers`
  - XPS: `gpu`, `gpu-on`, `gpu-off`, `prime-run`, `battery-health`
 
@@ -15,6 +16,9 @@
  - `SUPER` + `D` foot, `W` brave, `C` code, `S` spotify, `M` prism, `O` orca, `G` steam (XPS)
  - `SUPER` + `SHIFT` + `S` region screenshot, `Print` full
  - `SUPER` + `1-0` workspace, `SHIFT` to move, drag/`SHIFT` drag to move/resize
+ - Agents: hold `SUPER` to peek, `SUPER` + `A` pick, `SHIFT` + `A` new, `N` next that wants you, `CTRL` + `Q` end it.
+   `SUPER` + `Q` only closes the window, `Ctrl+\` detaches. After a reboot agents come back as shells, pick
+   marks them `resume`
 
 ## Reinstall
 ```

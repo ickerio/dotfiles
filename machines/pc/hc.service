@@ -1,0 +1,13 @@
+# The PC runs agents around the clock, usually with nobody logged in, so herdr-core starts at boot (lingering)
+# rather than when the laptop first connects. Agents started with --keep come back as shells straight away, ready
+# for `lookout pick` to resume their Claude. hc runs the core in a unit of its own, this only starts it
+[Unit]
+Description=herdr-core (hc), so kept agents come back after a reboot
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/hc server start
+
+[Install]
+WantedBy=default.target

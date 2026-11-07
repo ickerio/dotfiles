@@ -1,7 +1,11 @@
 [package]
-name = "cairn"
+name = "lookout"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+# hc speaks JSON
+serde_json = "1"
 
 [profile.release]
 lto = true

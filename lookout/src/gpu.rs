@@ -1,4 +1,4 @@
-//! The NVIDIA GPU through NVML, loaded at runtime so cairn still runs on machines without the driver
+//! The NVIDIA GPU through NVML, loaded at runtime so lookout still runs on machines without the driver
 
 use std::ffi::{c_int, c_void};
 use std::path::Path;

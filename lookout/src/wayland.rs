@@ -145,6 +145,6 @@ fn encode(obj: u32, op: u16, args: &[Arg]) -> Vec<u8> {
 }
 
 fn lost(err: io::Error) -> ! {
-    eprintln!("cairn: lost wayland connection: {err}");
+    eprintln!("lookout: lost wayland connection: {err}");
     exit(1);
 }

@@ -58,6 +58,56 @@ extern "C" {
     fn munmap(addr: *mut c_void, len: usize) -> c_int;
     fn dlopen(file: *const c_char, mode: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+    fn sigemptyset(set: *mut SigSet) -> c_int;
+    fn sigaddset(set: *mut SigSet, signum: c_int) -> c_int;
+    fn sigprocmask(how: c_int, set: *const SigSet, old: *mut SigSet) -> c_int;
+    fn signalfd(fd: c_int, mask: *const SigSet, flags: c_int) -> c_int;
+    fn kill(pid: c_int, sig: c_int) -> c_int;
+}
+
+/// glibc's sigset_t, 1024 bits
+#[repr(C)]
+struct SigSet([u64; 16]);
+
+pub const SIGUSR1: c_int = 10;
+pub const SIGUSR2: c_int = 12;
+
+/// Blocks `signals` and returns a file that becomes readable when one arrives, so they're handled in the poll
+/// loop rather than in a handler. Children started by std::process get the mask cleared again
+pub fn signal_file(signals: &[c_int]) -> io::Result<File> {
+    let mut set = SigSet([0; 16]);
+    unsafe {
+        sigemptyset(&mut set);
+        for &signal in signals {
+            sigaddset(&mut set, signal);
+        }
+        const SIG_BLOCK: c_int = 0;
+        if sigprocmask(SIG_BLOCK, &set, std::ptr::null_mut()) < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        const SFD_NONBLOCK_CLOEXEC: c_int = 0o4000 | 0o2000000;
+        let fd = signalfd(-1, &set, SFD_NONBLOCK_CLOEXEC);
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(File::from_raw_fd(fd))
+    }
+}
+
+/// The signal numbers waiting in a file from signal_file, empty once it's drained
+pub fn read_signals(file: &mut File) -> Vec<c_int> {
+    use std::io::Read;
+    // Each is a 128 byte signalfd_siginfo, starting with the signal number
+    let mut buf = [0u8; 128 * 8];
+    let n = file.read(&mut buf).unwrap_or(0);
+    buf[..n].chunks_exact(128).map(|info| u32::from_ne_bytes(info[..4].try_into().unwrap()) as c_int).collect()
+}
+
+pub fn send_signal(pid: i32, signal: c_int) -> io::Result<()> {
+    if unsafe { kill(pid, signal) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 pub fn poll_fds(fds: &mut [PollFd], timeout_ms: i32) -> io::Result<()> {

@@ -66,15 +66,14 @@ impl Stats {
         let (hour, min) = sys::local_time();
         let mut items = vec![("", format!("{hour:02}:{min:02}"), None)];
         if let Some((path, slow)) = &mut self.battery {
-            items.push((
-                "BAT",
-                slow.get(|| {
-                    let capacity = fs::read_to_string(path.join("capacity")).unwrap_or_default();
-                    let charging = fs::read_to_string(path.join("status")).is_ok_and(|s| s.trim() == "Charging");
-                    format!("{}{}", capacity.trim(), if charging { "+" } else { "" })
-                }),
-                None,
-            ));
+            // "<percent>" or "<percent>c" while charging, read together since both are slow
+            let reading = slow.get(|| {
+                let capacity = fs::read_to_string(path.join("capacity")).unwrap_or_default();
+                let charging = fs::read_to_string(path.join("status")).is_ok_and(|s| s.trim() == "Charging");
+                format!("{}{}", capacity.trim(), if charging { "c" } else { "" })
+            });
+            let charging = reading.ends_with('c');
+            items.push(("BAT", reading.trim_end_matches('c').to_string(), charging.then(|| "chg".to_string())));
         }
         if let Some(slow) = &mut self.wireless {
             items.push(("WIFI", slow.get(|| wifi().map_or("-".into(), |q| q.to_string())), None));
@@ -97,7 +96,7 @@ impl Stats {
     pub fn widest(&self) -> Vec<Item> {
         let mut items = vec![("", "00:00".into(), None)];
         if self.battery.is_some() {
-            items.push(("BAT", "100+".into(), None));
+            items.push(("BAT", "100".into(), Some("chg".into())));
         }
         if self.wireless.is_some() {
             items.push(("WIFI", "100".into(), None));
@@ -121,9 +120,9 @@ impl Stats {
     }
 }
 
-/// Total memory as a whole number of GiB in brackets, e.g. "(16)"
+/// Total memory as a whole number of GiB after a slash, e.g. "/16", so "3.6/16" reads as used of total
 fn capacity(total: f32) -> String {
-    format!("({})", total.round())
+    format!("/{}", total.round())
 }
 
 /// (idle, total) jiffies across all CPUs
