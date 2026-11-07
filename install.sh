@@ -167,8 +167,6 @@ install_lookout() {
     echo "Building lookout"
     cargo build --release --manifest-path lookout/Cargo.toml
     sudo install -Dm755 lookout/target/release/lookout /usr/local/bin/lookout
-    # It was called cairn
-    sudo rm -f /usr/local/bin/cairn
 }
 
 generate_key() {
