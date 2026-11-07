@@ -30,7 +30,7 @@ install_packages() {
     echo "Installing packages"
     sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono noto-fonts \
         pipewire-pulse wireplumber playerctl code unzip bun prismlauncher rust tailscale \
-        mosh tmux grim slurp wl-clipboard fuzzel
+        grim slurp wl-clipboard fuzzel
 
     case "$MACHINE" in
         pc)
@@ -63,7 +63,7 @@ install_yay() {
 
 install_aur_packages() {
     echo "Installing AUR packages"
-    yay -S --needed brave-bin stably-orca-bin
+    yay -S --needed brave-bin
 
     if [ "$MACHINE" = xps ]; then
         # GTX 1050 is Pascal, which nvidia-open doesn't support
@@ -90,7 +90,7 @@ create_udev_rules() {
 
 enable_tailscale() {
     # Login lives in /var/lib/tailscale, which a reinstall wipes, so `sudo tailscale up` again after
-    # (`--ssh` on the PC, which serves Remote-SSH and mosh instead of sshd)
+    # (`--ssh` on the PC, which serves Remote-SSH and hc instead of sshd)
     sudo systemctl enable --now tailscaled.service
 }
 

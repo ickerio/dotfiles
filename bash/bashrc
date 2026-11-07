@@ -10,6 +10,8 @@ alias grep='grep --color=auto'
 
 # Prompt: machine name and folder
 PS1='\[\e[1;32m\]\h\[\e[0m\] \[\e[1;34m\]\w\[\e[0m\] '
+# A dim "hc ›" in front when the shell lives in a herdr-core terminal, which outlasts its window
+[[ -n $HC_TERMINAL_ID ]] && PS1="\[\e[90m\]hc ›\[\e[0m\] $PS1"
 
 # Tools that install themselves to ~/.local/bin (Claude Code etc)
 export PATH="$HOME/.local/bin:$PATH"

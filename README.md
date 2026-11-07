@@ -4,7 +4,6 @@
  - `./install.sh [--xps]`
  - `sudo tailscale up [--ssh]`
  - `start-hyprland`
- - `mdesk [session]`, `Ctrl+B D`
  - `claude`, `/remote-control`
  - `lookout/glyphs.sh`
  - Agents: `hc` (`hc ls`, `hc attach`), XPS once: `hc machine add desktop --name desktop`
@@ -13,7 +12,7 @@
 
 ## Keys
  - `SUPER` + `Q` close, `Backspace` exit, `V` float, `F` fullscreen
- - `SUPER` + `D` foot, `W` brave, `C` code, `S` spotify, `M` prism, `O` orca, `G` steam (XPS)
+ - `SUPER` + `D` foot, `W` brave, `C` code, `S` spotify, `M` prism, `G` steam (XPS)
  - `SUPER` + `SHIFT` + `S` region screenshot, `Print` full
  - `SUPER` + `1-0` workspace, `SHIFT` to move, drag/`SHIFT` drag to move/resize
  - Agents: hold `SUPER` to peek, `SUPER` + `A` pick, `SHIFT` + `A` new, `N` next that wants you, `CTRL` + `Q` end it.
