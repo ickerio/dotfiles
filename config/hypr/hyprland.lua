@@ -29,10 +29,15 @@ hl.config({
     },
 
     decoration = {
-        rounding       = 4,
-        rounding_power = 2,
+        -- Square, like lookout's bar and sheet
+        rounding       = 0,
 
         blur = {
+            enabled = false,
+        },
+
+        -- Flat, like the bar: its default grey reads as a light rim against the dark wallpaper rather than a shadow
+        shadow = {
             enabled = false,
         },
     },
@@ -51,17 +56,33 @@ hl.config({
     },
 })
 
--- No gaps or rounding when a window is alone on its workspace (or maximised)
+-- No gaps when a window is alone on its workspace (or maximised)
 hl.workspace_rule({ workspace = "w[tv1]", gaps_out = 0, gaps_in = 0 })
 hl.workspace_rule({ workspace = "f[1]",   gaps_out = 0, gaps_in = 0 })
-hl.window_rule({ name = "no-gaps-wtv1", match = { float = false, workspace = "w[tv1]" }, rounding = 0 })
-hl.window_rule({ name = "no-gaps-f1",   match = { float = false, workspace = "f[1]" },   rounding = 0 })
+
+-- lookout's bar, sheet and picker appear at once rather than animating in, since they're asked for with a key
+hl.layer_rule({ name = "lookout-no-anim", match = { namespace = "^lookout$" }, no_anim = true })
 
 hl.animation({ leaf = "windows",     enabled = true, speed = 7,  bezier = "default"  })
 hl.animation({ leaf = "windowsOut",  enabled = true, speed = 7,  bezier = "default", style = "popin 80%" })
 hl.animation({ leaf = "workspaces",  enabled = false })
 
 local mainMod = "SUPER"
+
+-- Holding SUPER drops lookout's sheet and letting go puts it away, but a combo like SUPER + 1 swallows the letting go,
+-- and on the workspace you're already on nothing else moves to put it away. So every SUPER + key combo puts it away
+-- itself. Mouse binds are left alone
+local bind = hl.bind
+function hl.bind(keys, action, opts)
+    if keys:find("^SUPER %+") and not keys:find("mouse") then
+        local inner = action
+        action = function()
+            hl.dispatch(hl.dsp.exec_cmd("lookout unpeek"))
+            if type(inner) == "function" then inner() else hl.dispatch(inner) end
+        end
+    end
+    return bind(keys, action, opts)
+end
 
 hl.bind(mainMod .. " + Q",         hl.dsp.window.close())
 hl.bind(mainMod .. " + backspace", hl.dsp.exit())
@@ -76,15 +97,16 @@ hl.bind(mainMod .. " + D", hl.dsp.exec_cmd("footclient"))
 hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("prismlauncher"))
 
 -- Agents live in herdr-core (hc) and lookout finds them. Their windows only view them: SUPER + Q closes the
--- window, the agent keeps going
-hl.bind(mainMod .. " + A",         hl.dsp.exec_cmd("lookout pick"))
-hl.bind(mainMod .. " + SHIFT + A", hl.dsp.exec_cmd("lookout new"))
+-- window, the agent keeps going. SUPER + A turns the sheet into a search, so it and the two after it skip the
+-- unpeek above: put away first, the sheet would flicker shut before opening again as the search
+bind(mainMod .. " + A",            hl.dsp.exec_cmd("lookout pick"))
+bind(mainMod .. " + SHIFT + A",    hl.dsp.exec_cmd("lookout new"))
+bind(mainMod .. " + SHIFT + Q",    hl.dsp.exec_cmd("lookout kill"))
 hl.bind(mainMod .. " + N",         hl.dsp.exec_cmd("lookout next"))
-hl.bind(mainMod .. " + CTRL + Q",  hl.dsp.exec_cmd("lookout kill"))
 
--- Hold SUPER to peek at lookout's board over the windows. lookout waits out the hold itself (200ms), since a long
--- press waits a whole key repeat delay. Letting go puts it back, and so does anything that moves on screen, in
--- case a combo like SUPER + D swallows the release
+-- Hold SUPER to drop lookout's sheet, every agent in detail, from its bar. lookout waits out the hold itself (200ms),
+-- since a long press waits a whole key repeat delay. Letting go puts it away, and so does anything that moves on
+-- screen, in case a combo like SUPER + D swallows the release
 hl.bind("SUPER_L", hl.dsp.exec_cmd("lookout peek"),   { non_consuming = true, ignore_mods = true })
 hl.bind("SUPER_L", hl.dsp.exec_cmd("lookout unpeek"), { release = true, non_consuming = true, ignore_mods = true })
 
