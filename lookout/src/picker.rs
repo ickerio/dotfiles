@@ -1,5 +1,5 @@
-//! What the sheet lists, and the search over it. Holding SUPER shows every agent; SUPER + A is the same sheet with a
-//! line to type into: the shells join the agents, and typing narrows them to the ones its letters appear in, in
+//! What the sheet lists, and the search over it. SUPER + A, or a click on the bar, shows every agent by what it wants
+//! and the shells after them, with a line to type into: typing narrows them to the ones its letters appear in, in
 //! order, best first, with the projects an agent could be started in after them. SUPER + SHIFT + A searches only the
 //! projects, SUPER + SHIFT + Q asks before ending the focused agent, and what went wrong is said in a row
 
@@ -12,8 +12,6 @@ use crate::ui::{self, Group, Icon};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
-    /// Every agent, while SUPER is held or after a click on the bar. Nothing typed, nothing chosen
-    Peek,
     /// Every terminal, and the projects to start one in once something's typed
     Search,
     Projects,
@@ -223,14 +221,14 @@ impl Picker {
     }
 
     pub fn selected_row(&self) -> Option<&Row> {
-        (self.mode != Mode::Peek).then(|| self.shown.get(self.selected).map(|(r, _)| &self.rows[*r])).flatten()
+        self.shown.get(self.selected).map(|(r, _)| &self.rows[*r])
     }
 
     /// The heading a row goes under, as the list stands: by what each agent wants until something's typed, then
     /// best match first
     pub fn heading(&self, row: &Row) -> (Section, Option<&'static str>) {
         // Typed, the projects are only set apart by a gap: their + already says what they're for
-        if self.typed() || !matches!(self.mode, Mode::Peek | Mode::Search) {
+        if self.typed() || self.mode != Mode::Search {
             return (if row.section == Section::New { Section::New } else { Section::Plain }, None);
         }
         let title = match row.section {
@@ -472,7 +470,7 @@ pub fn note(msg: &str) -> Picker {
     Picker::new(Mode::Note, what.to_string(), vec![row])
 }
 
-/// What SUPER + A searches: the agents as the peek lists them, then the shells, then starting an agent, by its row
+/// What SUPER + A searches: the agents by what they want, then the shells, then starting an agent, by its row
 /// or in a project typed
 pub fn search_rows(
     agents: &[Agent],

@@ -64,15 +64,12 @@ extern "C" {
     fn sigprocmask(how: c_int, set: *const SigSet, old: *mut SigSet) -> c_int;
     fn signalfd(fd: c_int, mask: *const SigSet, flags: c_int) -> c_int;
     fn sigqueue(pid: c_int, sig: c_int, value: *mut c_void) -> c_int;
-    fn clock_gettime(clock: c_int, ts: *mut [i64; 2]) -> c_int;
 }
 
 /// glibc's sigset_t, 1024 bits
 #[repr(C)]
 struct SigSet([u64; 16]);
 
-pub const SIGUSR1: c_int = 10;
-pub const SIGUSR2: c_int = 12;
 pub const SIGTERM: c_int = 15;
 /// What `lookout pick`, `new` and `kill` send, with which in its value. A real-time signal, so each one sent arrives
 /// rather than ones close together merging. SIGRTMIN is 34 under glibc, and this is clear of what anything else uses
@@ -258,14 +255,6 @@ pub unsafe fn symbol<F: Copy>(lib: *mut c_void, name: &CStr) -> Option<F> {
     assert_eq!(std::mem::size_of::<F>(), std::mem::size_of::<*mut c_void>(), "F must be a function pointer");
     let sym = unsafe { dlsym(lib, name.as_ptr()) };
     (!sym.is_null()).then(|| unsafe { std::mem::transmute_copy(&sym) })
-}
-
-/// Milliseconds on a clock that only goes forward, the same for every process
-pub fn monotonic_ms() -> u64 {
-    const CLOCK_MONOTONIC: c_int = 1;
-    let mut ts = [0i64; 2];
-    unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) };
-    ts[0] as u64 * 1000 + ts[1] as u64 / 1_000_000
 }
 
 /// Local time, following the system timezone

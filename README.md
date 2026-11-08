@@ -5,7 +5,7 @@
  - `sudo tailscale up [--ssh]`
  - `start-hyprland`
  - `claude`, `/remote-control`
- - `lookout/glyphs.sh`, `cargo run --release --features shot -- shot out.png --peek` to see the bar without restarting it
+ - `lookout/glyphs.sh`, `cargo run --release --features shot -- shot out.png --pick` to see the bar without restarting it
  - Brave in the bar's colours: `brave://extensions`, Developer mode, Load unpacked `~/dotfiles/brave/theme`
  - Agents: `hc` (`hc ls`, `hc attach`), XPS once: `hc machine add desktop --name desktop`
  - PC: `aux`, `speakers`
@@ -16,7 +16,7 @@
  - `SUPER` + `D` foot, `W` brave, `C` code, `S` spotify, `M` prism, `G` steam (XPS)
  - `SUPER` + `SHIFT` + `S` region screenshot, `Print` full
  - `SUPER` + `1-0` workspace, `SHIFT` to move, drag/`SHIFT` drag to move/resize
- - Agents: click a tab in the bar to go to it, click the bar or hold `SUPER` for every agent in detail, `SUPER` + `A` the same sheet as a search (type to narrow, Enter, Esc or `SUPER` to close), `SHIFT` + `A` new, `N` next that wants you, `SHIFT` + `Q` end it.
+ - Agents: click a tab in the bar to go to it, `SUPER` + `A` or click the bar for every agent in detail and a search (type to narrow, Enter, Esc or `SUPER` to close), `SHIFT` + `A` new, `N` next that wants you, `SHIFT` + `Q` end it.
    `SUPER` + `Q` only closes the window, `Ctrl+\` detaches. After a reboot agents come back as shells, pick
    marks them `resume`
 

@@ -23,14 +23,12 @@ use crate::hypr::{self, Hypr};
 use crate::keys::{self, Keys};
 use crate::picker::{self, Action, Mode, Picker, Shows};
 use crate::stats::{Item, Stats};
-use crate::sys::{self, Map, PollFd, POLLIN, SIGCMD, SIGUSR1, SIGUSR2};
+use crate::sys::{self, Map, PollFd, POLLIN, SIGCMD};
 use crate::ui::{self, Hit, View, BAR_H, SHEET_W};
 use crate::wayland::{Arg, Conn, Event, DISPLAY};
 
 /// How often the stats are read again. The bar is only drawn again if what it says changed
 const REFRESH: Duration = Duration::from_secs(5);
-/// How long SUPER is held before the sheet drops. Hyprland's own long press waits a whole key repeat delay
-const PEEK_DELAY: Duration = Duration::from_millis(200);
 /// How long a pill shows brighter after its agent starts wanting you
 const FLASH: Duration = Duration::from_millis(900);
 /// How long the projects found last are trusted before every machine is asked again
@@ -75,10 +73,10 @@ const BTN_LEFT: u32 = 0x110;
 pub fn run() -> ! {
     // First, so threads started later (the NVIDIA library starts one) inherit the block and can't take a signal
     // whose default is to end the process
-    let mut signals = sys::signal_file(&[SIGUSR1, SIGUSR2, SIGCMD]).unwrap_or_else(|err| fail(&format!("can't take signals: {err}")));
+    let mut signals = sys::signal_file(&[SIGCMD]).unwrap_or_else(|err| fail(&format!("can't take signals: {err}")));
     // One bar: starting another (after an install, say) replaces the one running, rather than stack two
     replace_running();
-    // Then where to find this, so a peek during the slow start (the NVIDIA library) waits rather than going nowhere
+    // Then where to find this, so a command during the slow start (the NVIDIA library) waits rather than going nowhere
     write_pid();
     let mut desktop = Desktop::new().unwrap_or_else(|err| fail(&format!("can't start: {err}")));
 
@@ -89,7 +87,7 @@ pub fn run() -> ! {
         let flash = desktop.flash.values().min().copied();
         let repeat = desktop.repeat.map(|(_, at)| at);
         let deaf = (desktop.picker.is_some() && !desktop.keyboard_entered).then(|| desktop.picker_opened + KEYBOARD_WAIT);
-        let wake = [tick, flash, desktop.peek_at, repeat, deaf, desktop.agents.retry_at(), desktop.hypr.retry_at()];
+        let wake = [tick, flash, repeat, deaf, desktop.agents.retry_at(), desktop.hypr.retry_at()];
         let timeout = wake.into_iter().flatten().min().map_or(-1, |at| at.saturating_duration_since(now).as_millis() as i32 + 1);
 
         let mut fds = vec![
@@ -115,34 +113,8 @@ pub fn run() -> ! {
             desktop.jobs_done();
         }
         if fds[1].revents != 0 {
-            // In the order they were sent: signals waiting together come lowest number first, so a quick tap's
-            // SUPER up would otherwise always come before its SUPER down
-            let mut waiting = sys::read_signals(&mut signals);
-            waiting.sort_by_key(|(_, when)| *when);
-            for (signal, when) in waiting {
-                if signal == SIGCMD {
-                    desktop.command(when);
-                    continue;
-                }
-                // SUPER went down with the search open: put it all away. Not the SUPER of the SUPER + A that opened
-                // it, which went down before
-                if signal == SIGUSR1 && desktop.picker.is_some() {
-                    if when == 0 || when > desktop.picker_opened_ms {
-                        desktop.close_picker();
-                    }
-                    continue;
-                }
-                // SUPER went down: peek if it's still held, and nothing has moved, once the delay is up. Unless it
-                // went up again after, and that arrived first
-                if signal == SIGUSR1 && !desktop.peeking && (when == 0 || when > desktop.released) {
-                    desktop.peek_at.get_or_insert(Instant::now() + PEEK_DELAY);
-                } else if signal == SIGUSR2 {
-                    desktop.released = desktop.released.max(when);
-                    desktop.peek_at = None;
-                    // Still open if it's being pointed at, to be clicked
-                    let pointed = desktop.hover.is_some_and(|h| h.0 == desktop.sheet.surface);
-                    desktop.set_sheet(false, desktop.pinned && pointed);
-                }
+            for (_, what) in sys::read_signals(&mut signals) {
+                desktop.command(what);
             }
         }
         if ready(agents_fd) && desktop.agents.read() {
@@ -162,7 +134,6 @@ pub fn run() -> ! {
                         if desktop.picker_opened.elapsed() > Duration::from_millis(300) {
                             desktop.close_picker();
                         }
-                        desktop.set_sheet(false, false);
                     }
                     hypr::Event::Workspace(name) => {
                         if name != desktop.workspace {
@@ -174,18 +145,12 @@ pub fn run() -> ! {
             }
             // Once for the lot, since a window opening alone sends several
             if moved {
-                desktop.peek_at = None;
                 desktop.close_picker();
-                desktop.set_sheet(false, false);
                 desktop.update_fullscreen();
             }
         }
 
         let now = Instant::now();
-        if desktop.peek_at.is_some_and(|at| at <= now) {
-            desktop.peek_at = None;
-            desktop.set_sheet(true, desktop.pinned);
-        }
         let before = desktop.flash.len();
         desktop.flash.retain(|_, until| *until > now);
         if desktop.flash.len() != before {
@@ -219,7 +184,7 @@ fn fail(msg: &str) -> ! {
     exit(1);
 }
 
-/// Where `lookout peek` finds the daemon
+/// Where `lookout pick` and the rest find the daemon
 pub fn pid_file() -> PathBuf {
     PathBuf::from(env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into())).join("lookout.pid")
 }
@@ -300,13 +265,6 @@ struct Desktop {
     /// What clicking where does on the bar (spans of x) and the sheet (spans of y), from their last drawing
     bar_hits: Vec<(i32, i32, Hit)>,
     sheet_hits: Vec<(i32, i32, Hit)>,
-    /// The sheet's open while SUPER is held, or pinned open by a click on the bar
-    peeking: bool,
-    pinned: bool,
-    /// When a peek that's waiting out PEEK_DELAY shows, unless SUPER is let go or something moves first
-    peek_at: Option<Instant>,
-    /// When SUPER was last let go, by sys::monotonic_ms
-    released: u64,
     /// A fullscreen window hides the bar, so the line shows instead
     fullscreen: bool,
     /// The name of the workspace showing
@@ -334,8 +292,6 @@ struct Desktop {
     /// The picker, while it's open, and when it opened
     picker: Option<Picker>,
     picker_opened: Instant,
-    /// The same, by sys::monotonic_ms, to tell the SUPER that opened it from a press after
-    picker_opened_ms: u64,
     /// Slow work done off the loop sends what it found here, then wakes the loop with a byte down the pipe
     jobs: (Sender<Job>, Receiver<Job>),
     wake: (PipeReader, PipeWriter),
@@ -408,10 +364,6 @@ impl Desktop {
             cursor: 0,
             bar_hits: Vec::new(),
             sheet_hits: Vec::new(),
-            peeking: false,
-            pinned: false,
-            peek_at: None,
-            released: 0,
             fullscreen: hypr::fullscreen(),
             workspace: hypr::workspace(),
             clock: stats.clock(),
@@ -431,7 +383,6 @@ impl Desktop {
             repeat_rate: (25, 600),
             picker: None,
             picker_opened: Instant::now(),
-            picker_opened_ms: 0,
             jobs: mpsc::channel(),
             wake: io::pipe()?,
             shells: (HashMap::new(), HashMap::new()),
@@ -616,24 +567,13 @@ impl Desktop {
                 (self.enter_serial, self.cursor) = (serial, 0);
                 self.hover = Some((surface, fixed(x), fixed(y)));
             }
-            // leave: off the sheet closes it, like a menu, unless SUPER's still held
-            1 => {
-                let left = self.hover.take().map(|h| h.0);
-                if left == Some(self.sheet.surface) && self.sheet.show {
-                    self.set_sheet(self.peeking, false);
-                }
-            }
+            // leave
+            1 => self.hover = None,
             // motion
             2 => {
                 let (_, x, y) = (args.uint(), args.uint(), args.uint());
                 if let Some((surface, ..)) = self.hover {
                     self.hover = Some((surface, fixed(x), fixed(y)));
-                    // Moving onto the sheet keeps it open after SUPER is let go, to click a row without SUPER held,
-                    // since SUPER + click drags the window under it. Only moving: a sheet that drops open under a
-                    // pointer resting there still goes away with SUPER
-                    if surface == self.sheet.surface && self.sheet.show {
-                        self.pinned = true;
-                    }
                 }
             }
             // button
@@ -690,14 +630,10 @@ impl Desktop {
 
     fn click(&mut self) {
         match self.hit().map(|(_, hit)| hit.clone()) {
-            Some(Hit::Do(action) | Hit::Row(_, action)) => {
-                self.set_sheet(false, false);
-                self.act(action);
-            }
-            // The bar puts a search away, or opens or closes the sheet
+            Some(Hit::Do(action) | Hit::Row(_, action)) => self.act(action),
+            // The rest of the bar opens the search, or puts it away
             Some(Hit::Sheet) if self.picker.is_some() => self.close_picker(),
-            Some(Hit::Sheet) => self.set_sheet(self.peeking, !self.pinned),
-            Some(Hit::Search) => self.open_search(),
+            Some(Hit::Sheet) => self.open_search(),
             None => {}
         }
     }
@@ -727,10 +663,9 @@ impl Desktop {
         self.surf(which).pixels = Some(Pixels { map, pool, buffers, size });
     }
 
-    /// Opens or closes the sheet: it shows while peeking or pinned
-    fn set_sheet(&mut self, peeking: bool, pinned: bool) {
-        (self.peeking, self.pinned) = (peeking, pinned);
-        let show = peeking || pinned || self.picker.is_some();
+    /// The sheet shows while the picker's open
+    fn update_sheet(&mut self) {
+        let show = self.picker.is_some();
         if show != self.sheet.show {
             (self.sheet.show, self.sheet.dirty) = (show, true);
             if show {
@@ -747,7 +682,7 @@ impl Desktop {
             Mode::Search => cmd::PICK,
             Mode::Projects => cmd::NEW,
             Mode::End => cmd::END,
-            Mode::Peek | Mode::Note => 0,
+            Mode::Note => 0,
         });
         if open == Some(what) {
             return self.close_picker();
@@ -771,11 +706,9 @@ impl Desktop {
             self.keyboard_entered = false;
             self.conn.send(self.sheet.layer, LAYER_SET_KEYBOARD_INTERACTIVITY, &[Arg::Uint(1)]);
             self.picker_opened = Instant::now();
-            self.picker_opened_ms = sys::monotonic_ms();
         }
         self.picker = Some(picker);
-        self.peek_at = None;
-        self.set_sheet(false, false);
+        self.update_sheet();
         self.sheet.dirty = true;
     }
 
@@ -784,15 +717,9 @@ impl Desktop {
         if self.picker.take().is_some() {
             self.repeat = None;
             self.conn.send(self.sheet.layer, LAYER_SET_KEYBOARD_INTERACTIVITY, &[Arg::Uint(0)]);
-            self.set_sheet(self.peeking, false);
+            self.update_sheet();
             self.sheet.dirty = true;
         }
-    }
-
-    /// The agents, as the sheet lists them when it's peeked at
-    fn agent_rows(&self) -> Vec<picker::Row> {
-        let cwd = |addr: &str| self.agents.cwd(addr);
-        picker::agent_rows(&self.list, self.agents.focused(), &cwd)
     }
 
     fn search_rows(&self) -> Vec<picker::Row> {
@@ -977,8 +904,7 @@ impl Desktop {
         }
         let ctrl = self.keys.held(c"Control");
         match key {
-            // SUPER as well as Esc, since SUPER opened it. Pressed in it, since the search has the keyboard; Hyprland's
-            // `lookout peek` closes it too, whichever comes first
+            // SUPER as well as Esc, since SUPER opened it. It reaches here as the search has the keyboard
             keys::ESC | keys::SUPER_L | keys::SUPER_R => return self.close_picker(),
             keys::ENTER | keys::KP_ENTER => return self.pick(),
             _ => {}
@@ -1113,28 +1039,23 @@ impl Desktop {
         let mut damage_h = h;
         match which {
             Which::Bar => self.bar_hits = ui::bar(&mut canvas, &View { pointer: pointer(self.hover, surface), ..view }),
-            Which::Sheet => {
-                // Peeked at, the sheet lists the agents; searching, it lists what the search has
-                let peek;
-                let list = match &self.picker {
-                    Some(picker) => picker,
-                    None => {
-                        peek = Picker::new(Mode::Peek, String::new(), self.agent_rows());
-                        &peek
+            // It only shows while the picker's open, so there's always one to draw. Were there not, it's left clear
+            Which::Sheet => match self.picker.as_ref() {
+                Some(list) => {
+                    let (hits, height) = ui::sheet(&mut canvas, &View { pointer: pointer(self.hover, surface), ..view }, list);
+                    self.sheet_hits = hits;
+                    // Only the panel changes, or the panel it was if that was taller, rather than the whole surface
+                    damage_h = height.max(self.sheet_height).max(1);
+                    // Clicks only land on the panel, not the clear space below it
+                    if height != self.sheet_height {
+                        self.sheet_height = height;
+                        let region = self.region(SHEET_W, height);
+                        self.conn.send(surface, SURFACE_SET_INPUT_REGION, &[Arg::Obj(region)]);
+                        self.conn.send(region, REGION_DESTROY, &[]);
                     }
-                };
-                let (hits, height) = ui::sheet(&mut canvas, &View { pointer: pointer(self.hover, surface), ..view }, list);
-                self.sheet_hits = hits;
-                // Clicks only land on the sheet's panel, not the clear space below it
-                // Only the panel, or the panel it was if that was taller, rather than the whole surface
-                damage_h = height.max(self.sheet_height).max(1);
-                if height != self.sheet_height {
-                    self.sheet_height = height;
-                    let region = self.region(SHEET_W, height);
-                    self.conn.send(surface, SURFACE_SET_INPUT_REGION, &[Arg::Obj(region)]);
-                    self.conn.send(region, REGION_DESTROY, &[]);
                 }
-            }
+                None => canvas.fill(0, 0, w, h, 0),
+            },
             Which::Line => ui::line(&mut canvas, &ui::line_colours(&self.list)),
         }
         let id = pixels.buffers[i].0;

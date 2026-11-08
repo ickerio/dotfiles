@@ -5,7 +5,6 @@
 //!   --size WxH        the screen, 1920x1080 by default
 //!   --windows         two tiled terminals under the bar
 //!   --window          one terminal alone under the bar, flush with it as Hyprland lays out a lone window
-//!   --peek            the sheet open
 //!   --fullscreen      a fullscreen window, so only the line shows
 //!   --many | --few | --none | --calm    how many agents, and whether any want you
 //!   --pointer X,Y     where the pointer is, to see hovering
@@ -28,7 +27,7 @@ use crate::ui::{self, View, BAR_H, SHEET_W};
 
 pub fn run(args: &[String]) {
     let Some(out) = args.first() else {
-        eprintln!("usage: lookout shot <out.png> [--bg file.ppm] [--size WxH] [--windows] [--peek] [--fullscreen] [--many|--few|--none|--calm] [--pointer X,Y] [--flash]");
+        eprintln!("usage: lookout shot <out.png> [--bg file.ppm] [--size WxH] [--windows] [--pick|--new|--end|--note] [--type TEXT] [--fullscreen] [--many|--few|--none|--calm] [--pointer X,Y] [--flash]");
         exit(2);
     };
     let flag = |name: &str| args.iter().any(|a| a == name);
@@ -53,8 +52,7 @@ pub fn run(args: &[String]) {
     );
     let first = agents.first().map(|a| a.addr.clone()).filter(|_| flag("--flash"));
     let flash = |addr: &str| first.as_deref() == Some(addr);
-    // The sheet as SUPER + A, SUPER + SHIFT + A or SUPER + SHIFT + Q opens it, with --type's letters typed, or as
-    // holding SUPER drops it
+    // The sheet as SUPER + A, SUPER + SHIFT + A or SUPER + SHIFT + Q opens it, with --type's letters typed
     let projects: Vec<(Option<String>, String)> = ["/home/harry", "/home/harry/dotfiles", "/home/harry/ronin", "/home/harry/herdr-core"]
         .iter()
         .flat_map(|d| [(Some("desktop".to_string()), d.to_string()), (None, d.to_string())])
@@ -74,8 +72,6 @@ pub fn run(args: &[String]) {
         Some(picker::end("desktop/t5", "ronin", "desktop"))
     } else if flag("--note") {
         Some(picker::note("can't start dotfiles: hc: no such machine desktop"))
-    } else if flag("--peek") {
-        Some(Picker::new(Mode::Peek, String::new(), picker::agent_rows(&agents, Some("t10"), &cwd)))
     } else {
         None
     };

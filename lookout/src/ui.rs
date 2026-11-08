@@ -2,8 +2,8 @@
 //!
 //! - the bar across the top of the screen: every agent as a tab, the ones that want you first as tinted pills
 //!   saying what they want, then the rest in a steady order, and the stats and clock on the right
-//! - the sheet that drops from it, while SUPER is held or after a click on the bar: every agent in detail. SUPER + A
-//!   is the same sheet with a line to type into, to go to any terminal or start an agent (see picker.rs)
+//! - the sheet that hangs from its middle on SUPER + A or a click: every agent in detail, with a line to type into to
+//!   go to any terminal or start an agent (see picker.rs)
 //! - a 2px line across the top when a fullscreen window hides the bar, a stretch of it for each agent that wants
 //!   you in its colour
 //!
@@ -165,8 +165,6 @@ pub enum Hit {
     Do(Action),
     /// Open or close the sheet
     Sheet,
-    /// Start typing into the sheet
-    Search,
     /// A row of the sheet's, by its place in the list, and what it does
     Row(usize, Action),
 }
@@ -631,7 +629,6 @@ fn layout(list: &Picker) -> (Vec<(i32, Line)>, i32) {
     }
     if list.shown.is_empty() {
         let what = match list.mode {
-            Mode::Peek => "no agents running",
             _ if list.looking => "looking…",
             _ => "nothing matches",
         };
@@ -647,8 +644,7 @@ pub fn sheet_max_height() -> i32 {
     INPUT_H + 1 + SHEET_TOP + SHEET_ROWS as i32 * ROW_H + 4 * HEAD_H + 4 * GROUP_GAP + ROW_H + SHEET_BOTTOM
 }
 
-/// Draws the sheet at the top of the canvas, the same whether it's peeked at or searched: the line to type into,
-/// then the rows under their headings. Returns which spans of y do what when clicked, and how tall it is
+/// Draws the sheet at the top of the canvas: the line to type into, then the rows under their headings. Returns which spans of y do what when clicked, and how tall it is
 pub fn sheet(c: &mut Canvas, view: &View, list: &Picker) -> (Vec<(i32, i32, Hit)>, i32) {
     c.fill(0, 0, c.w, c.h, 0);
     let (lines, h) = layout(list);
@@ -656,7 +652,8 @@ pub fn sheet(c: &mut Canvas, view: &View, list: &Picker) -> (Vec<(i32, i32, Hit)
     // Its edges shown by its surface against the windows alone
     c.raise = SHEET_RAISE;
     c.fill(0, 0, c.w, h, opaque(0));
-    let mut hits = input(c, view, list);
+    input(c, list);
+    let mut hits = Vec::new();
     c.fill(0, INPUT_H, c.w, 1, opaque(RULE));
 
     let left = SHEET_PAD;
@@ -689,15 +686,15 @@ pub fn sheet(c: &mut Canvas, view: &View, list: &Picker) -> (Vec<(i32, i32, Hit)
         let (r, at) = &list.shown[row];
         let item = &list.rows[*r];
         // Searching, the pointer chooses the row it's over, so there's only ever one lit
-        let selected = !matches!(list.mode, Mode::Peek | Mode::Note) && row == list.selected;
+        let selected = list.mode != Mode::Note && row == list.selected;
         // Where choosing follows the pointer, the chosen row already shows it
-        let hovered = matches!(list.mode, Mode::Peek | Mode::End) && view.pointer.is_some_and(|(_, py)| py >= y && py < y + ROW_H);
+        let hovered = list.mode == Mode::End && view.pointer.is_some_and(|(_, py)| py >= y && py < y + ROW_H);
         if selected || hovered {
             c.fill(0, y, c.w, ROW_H, opaque(if selected { SELECTED } else { HOVER }));
         }
         // The window that's focused, marked at the left edge as the bar underlines it: quieter beside a chosen row
         if item.current {
-            c.fill(0, y, 2, ROW_H, opaque(if list.mode == Mode::Peek { INK } else { MID }));
+            c.fill(0, y, 2, ROW_H, opaque(MID));
         }
         let mid = y + ROW_H / 2;
         if let Some((icon, colour)) = item.icon {
@@ -765,9 +762,8 @@ fn lit_text(c: &mut Canvas, x: i32, y: i32, text: &str, colour: u32, at: &Match,
     }
 }
 
-/// The line at the top. Peeked at, it says how to search and who SUPER + N goes to; searching, it's what's typed,
-/// and what Enter does on the right; asking or saying what went wrong, it's the question
-fn input(c: &mut Canvas, view: &View, list: &Picker) -> Vec<(i32, i32, Hit)> {
+/// The line at the top: what's typed, and what Enter does on the right; asking or saying what went wrong, the question
+fn input(c: &mut Canvas, list: &Picker) {
     let right = c.w - SHEET_PAD;
     let (name_x, ..) = grid();
     let mid = INPUT_H / 2;
@@ -779,18 +775,6 @@ fn input(c: &mut Canvas, view: &View, list: &Picker) -> Vec<(i32, i32, Hit)> {
     };
     let hint_w = |keys: &str, what: &str| width(Size::Ui, keys) + SPACE + width(Size::Ui, what);
     match list.mode {
-        Mode::Peek => {
-            c.icon(Icon::Search, SHEET_ICON, mid - ICON / 2, DIM);
-            let x = hint(c, name_x, "super a", "search", DIM) + 28;
-            hint(c, x, "super shift a", "new", DIM);
-            let next = view.agents.iter().find(|a| a.urgency().is_some() && view.focused != Some(a.addr.as_str()));
-            if let Some(next) = next {
-                let label = cut(next.label(), 14);
-                hint(c, right - hint_w("super n", &label), "super n", &label, look(next).accent);
-            }
-            // Clicking it starts typing
-            return vec![(0, INPUT_H, Hit::Search)];
-        }
         Mode::Search | Mode::Projects => {
             c.icon(Icon::Search, SHEET_ICON, mid - ICON / 2, INK);
             let mut x = name_x;
@@ -825,7 +809,6 @@ fn input(c: &mut Canvas, view: &View, list: &Picker) -> Vec<(i32, i32, Hit)> {
             hint(c, right - hint_w("esc", "close"), "esc", "close", DIM);
         }
     }
-    Vec::new()
 }
 
 /// The fullscreen line: the screen's width shared out between `colours`, with a gap between each

@@ -3,8 +3,7 @@
 //! socket, so it works on any compositor with wlr-layer-shell; the agent commands drive Hyprland.
 //!
 //!   lookout                 the bar (start it with Hyprland). Run again, it replaces the one running
-//!   lookout peek|unpeek     drop the sheet with every agent in detail, or put it away
-//!   lookout pick            every terminal in the picker: focus its window or open one
+//!   lookout pick            the sheet: every agent, and a search to go to any terminal or start one
 //!   lookout new             start an agent in a project on any machine
 //!   lookout next            focus the agent that wants you most
 //!   lookout kill            end the agent in the focused window
@@ -37,8 +36,6 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => desktop::run(),
-        ["peek"] => cmd::signal(sys::SIGUSR1),
-        ["unpeek"] => cmd::signal(sys::SIGUSR2),
         ["pick"] => cmd::ask(cmd::PICK),
         ["new"] => cmd::ask(cmd::NEW),
         ["next"] => cmd::next(),
@@ -48,7 +45,7 @@ fn main() {
         #[cfg(feature = "shot")]
         ["shot", ..] => shot::run(&args[1..]),
         _ => {
-            eprintln!("usage: lookout [peek|unpeek|pick|new|next|kill|view <address>|waiting]");
+            eprintln!("usage: lookout [pick|new|next|kill|view <address>|waiting]");
             exit(2);
         }
     }

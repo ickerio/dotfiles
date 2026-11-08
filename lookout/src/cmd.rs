@@ -36,14 +36,6 @@ done"#;
 /// What a terminal that's only a shell at its prompt has in front
 const SHELLS: [&str; 5] = ["bash", "zsh", "fish", "sh", "nu"];
 
-/// Tells the daemon to peek (SIGUSR1) or stop (SIGUSR2), with when SUPER went down or up. Each comes from its own
-/// process started by a bind, so a quick tap's two can arrive the wrong way round, and the time sorts them out
-pub fn signal(signal: i32) {
-    if let Some(pid) = daemon() {
-        let _ = sys::send_signal(pid, signal, sys::monotonic_ms());
-    }
-}
-
 /// What `lookout pick`, `new` and `kill` ask the daemon to open its picker for, sent with sys::SIGCMD
 pub const PICK: u64 = 1;
 pub const NEW: u64 = 2;
