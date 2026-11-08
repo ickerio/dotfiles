@@ -9,16 +9,15 @@ use crate::sys;
 
 /// Reading the battery goes through ACPI to the embedded controller, ~15ms each time
 const BATTERY_EVERY: Duration = Duration::from_secs(30);
-/// Asks the wifi driver, ~1.5ms
-const WIFI_EVERY: Duration = Duration::from_secs(5);
+/// Asks the wifi driver, ~1ms, which was most of each 5s tick's work when it ran every tick
+const WIFI_EVERY: Duration = Duration::from_secs(30);
 
-/// Label, value, and an optional note shown smaller after it
+/// Label, value, and an optional note shown quieter after it
 pub type Item = (&'static str, String, Option<String>);
 
 pub struct Stats {
     battery: Option<(PathBuf, Slow)>,
     wireless: Option<Slow>,
-    mem_total: f32,
     cpu_prev: Option<(u64, u64)>,
     gpu: Option<Gpu>,
 }
@@ -55,16 +54,23 @@ impl Stats {
         Stats {
             battery: battery.map(|path| (path, Slow::new(BATTERY_EVERY))),
             wireless: wireless.then(|| Slow::new(WIFI_EVERY)),
-            mem_total: memory().map_or(0.0, |m| m.1),
             cpu_prev: None,
             gpu: Gpu::open(),
         }
     }
 
-    /// The clock first with an empty label, then each stat
+    /// The time, "14:32", and the date, "Sat 7 Nov"
+    pub fn clock(&self) -> (String, String) {
+        const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        let t = sys::local_time();
+        let date = format!("{} {} {}", DAYS[t.weekday.rem_euclid(7) as usize], t.day, MONTHS[t.month.rem_euclid(12) as usize]);
+        (format!("{:02}:{:02}", t.hour, t.min), date)
+    }
+
+    /// Each stat. While charging the battery's label is CHG rather than BAT
     pub fn items(&mut self) -> Vec<Item> {
-        let (hour, min) = sys::local_time();
-        let mut items = vec![("", format!("{hour:02}:{min:02}"), None)];
+        let mut items = Vec::new();
         if let Some((path, slow)) = &mut self.battery {
             // "<percent>" or "<percent>c" while charging, read together since both are slow
             let reading = slow.get(|| {
@@ -73,40 +79,23 @@ impl Stats {
                 format!("{}{}", capacity.trim(), if charging { "c" } else { "" })
             });
             let charging = reading.ends_with('c');
-            items.push(("BAT", reading.trim_end_matches('c').to_string(), charging.then(|| "chg".to_string())));
+            items.push((if charging { "CHG" } else { "BAT" }, reading.trim_end_matches('c').to_string(), None));
         }
         if let Some(slow) = &mut self.wireless {
             items.push(("WIFI", slow.get(|| wifi().map_or("-".into(), |q| q.to_string())), None));
         }
-        items.push(("CPU", self.cpu().map_or("-".into(), |c| c.to_string()), None));
+        // Not until there are two readings to compare
+        if let Some(cpu) = self.cpu() {
+            items.push(("CPU", cpu.to_string(), None));
+        }
         if let Some((used, total)) = memory() {
             items.push(("MEM", format!("{used:.1}"), Some(capacity(total))));
         }
         if let Some(gpu) = &self.gpu {
             items.push(("GPU", gpu.busy().map_or("-".into(), |b| b.to_string()), None));
-            match gpu.memory() {
-                Some((used, total)) => items.push(("VRAM", format!("{used:.1}"), Some(capacity(total)))),
-                None => items.push(("VRAM", "-".into(), None)),
+            if let Some((used, total)) = gpu.memory() {
+                items.push(("VRAM", format!("{used:.1}"), Some(capacity(total))));
             }
-        }
-        items
-    }
-
-    /// The longest values each item can show, used to size the text once so it doesn't jump around
-    pub fn widest(&self) -> Vec<Item> {
-        let mut items = vec![("", "00:00".into(), None)];
-        if self.battery.is_some() {
-            items.push(("BAT", "100".into(), Some("chg".into())));
-        }
-        if self.wireless.is_some() {
-            items.push(("WIFI", "100".into(), None));
-        }
-        items.push(("CPU", "100".into(), None));
-        items.push(("MEM", format!("{:.1}", self.mem_total), Some(capacity(self.mem_total))));
-        if let Some(gpu) = &self.gpu {
-            let total = gpu.memory().map_or(0.0, |m| m.1);
-            items.push(("GPU", "100".into(), None));
-            items.push(("VRAM", format!("{total:.1}"), Some(capacity(total))));
         }
         items
     }
@@ -116,7 +105,7 @@ impl Stats {
         let (prev_idle, prev_total) = self.cpu_prev.replace((idle, total))?;
         let total = total.saturating_sub(prev_total);
         let busy = total.saturating_sub(idle.saturating_sub(prev_idle));
-        Some(if total == 0 { 0 } else { (busy * 100 / total) as u32 })
+        Some((busy * 100).checked_div(total).unwrap_or(0) as u32)
     }
 }
 

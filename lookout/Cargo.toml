@@ -7,6 +7,10 @@ edition = "2021"
 # hc speaks JSON
 serde_json = "1"
 
+[features]
+# `lookout shot`, for seeing a change to the design without restarting the bar
+shot = []
+
 [profile.release]
 lto = true
 strip = true

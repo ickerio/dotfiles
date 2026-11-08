@@ -44,13 +44,11 @@ pub fn call(args: &[&str]) -> Result<Vec<u8>, String> {
 }
 
 /// A live terminal as `hc ls` sees it
+#[derive(Clone)]
 pub struct Term {
     /// "t3" here, "pc/t3" on a machine named pc
     pub addr: String,
     pub name: Option<String>,
-    /// What's running in it: the agent's own name for itself if it reports status ("claude-code"), otherwise the
-    /// program in the foreground ("bash")
-    pub program: Option<String>,
     /// idle, working, done, blocked or error, if it reports status
     pub status: Option<String>,
     pub cwd: String,
@@ -66,14 +64,7 @@ impl Term {
     pub fn machine(&self) -> Option<&str> {
         self.addr.rsplit_once('/').map(|(machine, _)| machine)
     }
-
-    /// A shell waiting at its prompt: what's left when an agent exits, or what `--keep` brings back after a reboot
-    pub fn at_prompt(&self) -> bool {
-        self.status.is_none() && self.program.as_deref().is_some_and(|p| SHELLS.contains(&p))
-    }
 }
-
-const SHELLS: [&str; 5] = ["bash", "zsh", "fish", "sh", "nu"];
 
 pub fn list() -> Vec<Term> {
     let Ok(ls) = json(&["ls"]) else { return Vec::new() };
@@ -84,7 +75,6 @@ pub fn list() -> Vec<Term> {
         .map(|t| Term {
             addr: str(&t["address"]).unwrap_or_default(),
             name: str(&t["name"]),
-            program: str(&t["agent"]),
             status: str(&t["status"]),
             cwd: str(&t["cwd"]).unwrap_or_default(),
         })

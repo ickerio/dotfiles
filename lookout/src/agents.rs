@@ -13,6 +13,8 @@ use crate::{hc, waiting};
 
 /// Wait before starting `hc events` again after it ends, e.g. while the core restarts for an update
 const RETRY: Duration = Duration::from_secs(2);
+/// Most of a line kept while waiting for its end. The first, a snapshot of every terminal, is the longest
+const LINE_MAX: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, PartialEq)]
 pub struct Agent {
@@ -25,10 +27,14 @@ pub struct Agent {
     pub kind: Option<String>,
     /// One line from the agent about it
     pub msg: Option<String>,
-    /// When it last reported, ms since the epoch
+    /// When it came into its state, ms since the epoch: when it last reported, unless that was the same state again.
+    /// 0 if that isn't known, as for another machine's agents until they next change, since hc's snapshot leaves
+    /// their time out
     pub since: u64,
     /// You've looked at its window since it last changed state
     pub seen: bool,
+    /// Background tasks it's waiting on, when its state is waiting
+    pub tasks: u32,
 }
 
 impl Agent {
@@ -37,8 +43,8 @@ impl Agent {
     }
 
     /// The machine it's on: the name hc knows it by, or this one's hostname
-    pub fn device(&self) -> String {
-        self.addr.rsplit_once('/').map_or_else(|| hc::HOST.clone(), |(machine, _)| machine.to_string())
+    pub fn device(&self) -> &str {
+        self.addr.rsplit_once('/').map_or(hc::HOST.as_str(), |(machine, _)| machine)
     }
 
     /// How much it wants you, most first, None if it doesn't or you've already looked
@@ -62,8 +68,9 @@ struct Term {
     name: Option<String>,
     /// None until it reports a status, and for programs that never do
     agent: Option<Agent>,
-    /// Its turn ended with background tasks still running, from the label `lookout waiting` keeps
-    waiting: bool,
+    /// Background tasks still running when its turn ended, from the label `lookout waiting` keeps
+    waiting: u32,
+    cwd: String,
 }
 
 impl Agents {
@@ -118,8 +125,8 @@ impl Agents {
     /// Reads what's arrived, true if the agents changed
     pub fn read(&mut self) -> bool {
         let Some((_, out)) = &mut self.stream else { return false };
-        let mut buf = [0u8; 16384];
-        let n = match out.read(&mut buf) {
+        let mut read = [0u8; 16384];
+        let n = match out.read(&mut read) {
             Ok(0) => {
                 self.stop();
                 return false;
@@ -131,18 +138,32 @@ impl Agents {
                 return false;
             }
         };
-        let before = self.list();
-        self.line.extend_from_slice(&buf[..n]);
-        while let Some(end) = self.line.iter().position(|&b| b == b'\n') {
-            let line: Vec<u8> = self.line.drain(..=end).collect();
-            if let Ok(msg) = serde_json::from_slice::<Value>(&line) {
-                self.apply(&msg);
+        // Every whole line, then what's left of the next moved to the front once. A line that never ends (hc
+        // gone wrong) starts the stream over rather than grow without bound
+        let mut buf = std::mem::take(&mut self.line);
+        buf.extend_from_slice(&read[..n]);
+        let (mut start, mut changed) = (0, false);
+        while let Some(end) = buf[start..].iter().position(|&b| b == b'\n') {
+            if let Ok(msg) = serde_json::from_slice::<Value>(&buf[start..start + end]) {
+                changed |= self.apply(&msg);
+            }
+            start += end + 1;
+            // "missed" stopped the stream: what's left is from before
+            if self.stream.is_none() {
+                return changed;
             }
         }
-        self.list() != before
+        buf.drain(..start);
+        if buf.len() > LINE_MAX {
+            self.stop();
+            return changed;
+        }
+        self.line = buf;
+        changed
     }
 
-    fn apply(&mut self, msg: &Value) {
+    /// Takes in one line from hc, true if the agents changed
+    fn apply(&mut self, msg: &Value) -> bool {
         // The first line is a snapshot of everything
         if let Some(records) = msg["terminals"].as_array() {
             let old = std::mem::take(&mut self.terms);
@@ -152,24 +173,31 @@ impl Agents {
                     name: hc::str(&record["name"]),
                     agent: agent(&addr, record, &record["status"]),
                     waiting: waiting(&record["labels"]),
+                    cwd: hc::str(&record["cwd"]).unwrap_or_default(),
                 };
                 // Keep what's been seen across a reconnect if nothing changed meanwhile
                 if let (Some(new), Some(Term { agent: Some(old), .. })) = (&mut term.agent, old.get(&addr)) {
                     new.seen = old.seen && old.state == new.state;
+                    if old.state == new.state && old.since > 0 {
+                        new.since = if new.since == 0 { old.since } else { new.since.min(old.since) };
+                    }
                 }
                 self.terms.insert(addr, term);
             }
             self.mark_focused_seen();
-            return;
+            return true;
         }
         match msg["method"].as_str() {
             Some("event") => {}
             // Fell behind and events were dropped, so start over from a fresh snapshot
-            Some("missed") => return self.stop(),
-            _ => return,
+            Some("missed") => {
+                self.stop();
+                return false;
+            }
+            _ => return false,
         }
         let params = &msg["params"];
-        let (Some(addr), Some(kind)) = (hc::str(&params["terminal"]), params["type"].as_str()) else { return };
+        let (Some(addr), Some(kind)) = (hc::str(&params["terminal"]), params["type"].as_str()) else { return false };
         let data = &params["data"];
         match kind {
             // The whole record
@@ -178,47 +206,74 @@ impl Agents {
                     name: hc::str(&data["name"]),
                     agent: agent(&addr, data, &data["status"]),
                     waiting: waiting(&data["labels"]),
+                    cwd: hc::str(&data["cwd"]).unwrap_or_default(),
                 };
                 self.terms.insert(addr, term);
+                true
             }
             "labels" => {
-                if let Some(term) = self.terms.get_mut(&addr) {
-                    term.waiting = waiting(&data["labels"]);
-                }
+                let Some(term) = self.terms.get_mut(&addr) else { return false };
+                let waiting = waiting(&data["labels"]);
+                std::mem::replace(&mut term.waiting, waiting) != waiting
             }
-            "finished" | "removed" => {
-                self.terms.remove(&addr);
-            }
+            "finished" | "removed" => self.terms.remove(&addr).is_some(),
             "status" => {
-                let Some(term) = self.terms.get_mut(&addr) else { return };
+                let Some(term) = self.terms.get_mut(&addr) else { return false };
                 let mut new = agent(&addr, &Value::Null, &data["status"]);
-                // The same state again (e.g. a new message while working) doesn't make it want you again
+                // The same state again (e.g. a new message while working) doesn't make it want you again, or
+                // restart how long it's been in it
                 if let (Some(new), Some(old)) = (&mut new, &term.agent) {
                     if old.state == new.state {
                         new.seen = old.seen;
+                        new.since = old.since;
                     }
                 }
+                let changed = term.agent != new;
                 term.agent = new;
-                self.mark_focused_seen();
+                self.mark_focused_seen() || changed
             }
-            _ => {}
+            _ => false,
         }
     }
 
-    /// A window was focused: looking at an agent's window means you've seen what it said
+    /// The agent whose window is focused, if it's one
+    pub fn focused(&self) -> Option<&str> {
+        self.focused.strip_prefix("hc:")
+    }
+
+    /// A window was focused: looking at an agent's window means you've seen what it said. True if that changed an
+    /// agent
     pub fn focus(&mut self, class: &str) -> bool {
-        let before = self.list();
         self.focused = class.to_string();
-        self.mark_focused_seen();
-        self.list() != before
+        self.mark_focused_seen()
     }
 
-    fn mark_focused_seen(&mut self) {
-        if let Some(addr) = self.focused.strip_prefix("hc:") {
-            if let Some(Term { agent: Some(agent), .. }) = self.terms.get_mut(addr) {
-                agent.seen = true;
-            }
+    /// True if the focused agent hadn't been seen
+    fn mark_focused_seen(&mut self) -> bool {
+        let Some(addr) = self.focused.strip_prefix("hc:") else { return false };
+        match self.terms.get_mut(addr) {
+            Some(Term { agent: Some(agent), .. }) => !std::mem::replace(&mut agent.seen, true),
+            _ => false,
         }
+    }
+
+    /// The live terminals that report no status: shells, and programs that don't say what they're doing
+    pub fn others(&self) -> Vec<hc::Term> {
+        self.terms
+            .iter()
+            .filter(|(_, t)| t.agent.is_none())
+            .map(|(addr, t)| hc::Term { addr: addr.clone(), name: t.name.clone(), status: None, cwd: t.cwd.clone() })
+            .collect()
+    }
+
+    /// The folder a terminal started in
+    pub fn cwd(&self, addr: &str) -> String {
+        self.terms.get(addr).map_or_else(String::new, |t| t.cwd.clone())
+    }
+
+    /// The names terminals have, which a new one's mustn't be
+    pub fn names(&self) -> Vec<String> {
+        self.terms.values().filter_map(|t| t.name.clone()).collect()
     }
 
     /// The agents, the ones that want you most first, then working ones, each oldest first
@@ -229,8 +284,9 @@ impl Agents {
             .filter_map(|term| {
                 let mut agent = term.agent.clone()?;
                 agent.name = term.name.clone();
-                if term.waiting && agent.state == "done" {
+                if term.waiting > 0 && agent.state == "done" {
                     agent.state = "waiting".into();
+                    agent.tasks = term.waiting;
                 }
                 Some(agent)
             })
@@ -240,9 +296,9 @@ impl Agents {
     }
 }
 
-/// Whether a terminal's labels say its agent is waiting on background tasks
-fn waiting(labels: &Value) -> bool {
-    hc::str(&labels[waiting::LABEL]).is_some()
+/// How many background tasks a terminal's labels say its agent is waiting on
+fn waiting(labels: &Value) -> u32 {
+    hc::str(&labels[waiting::LABEL]).map_or(0, |n| n.parse().unwrap_or(1))
 }
 
 /// An agent from a terminal `record` and its `status`, None if it has never reported one
@@ -255,7 +311,9 @@ fn agent(addr: &str, record: &Value, status: &Value) -> Option<Agent> {
         state,
         kind: hc::str(&status["kind"]),
         msg: hc::str(&status["msg"]),
-        since: record["status_ms"].as_u64().unwrap_or(now),
+        // A status event is new, so it's now. A snapshot says when, or leaves it unknown
+        since: if record.is_null() { now } else { record["status_ms"].as_u64().unwrap_or(0) },
         seen: false,
+        tasks: 0,
     })
 }

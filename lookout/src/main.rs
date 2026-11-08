@@ -1,25 +1,32 @@
-//! lookout: the clock and stats written quietly onto the desktop in the sky left of the wallpaper's mountain, and below
-//! them every coding agent running in herdr-core (`hc`), here and on other machines. Wayland is spoken directly over
-//! its socket, so it works on any compositor with wlr-layer-shell; the agent commands drive Hyprland and fuzzel.
+//! lookout: a bar across the top of the screen with every coding agent running in herdr-core (`hc`), here and on
+//! other machines, the ones that want you first, and the clock and stats. Wayland is spoken directly over its
+//! socket, so it works on any compositor with wlr-layer-shell; the agent commands drive Hyprland.
 //!
-//!   lookout                 the board (start it with Hyprland)
-//!   lookout peek|unpeek     raise the board over the windows, or put it back
-//!   lookout pick            every terminal in fuzzel: focus its window or open one
+//!   lookout                 the bar (start it with Hyprland). Run again, it replaces the one running
+//!   lookout peek|unpeek     drop the sheet with every agent in detail, or put it away
+//!   lookout pick            every terminal in the picker: focus its window or open one
 //!   lookout new             start an agent in a project on any machine
 //!   lookout next            focus the agent that wants you most
 //!   lookout kill            end the agent in the focused window
 //!   lookout view <address>  what an agent's foot window runs
 //!   lookout waiting         Claude Code's Stop hook: label the terminal with background tasks still running
+//!   lookout shot <out.png>  draw the bar with made-up agents into a picture (built with --features shot)
 
 mod agents;
 mod cmd;
 mod desktop;
+mod draw;
 mod font;
 mod gpu;
 mod hc;
 mod hypr;
+mod keys;
+mod picker;
+#[cfg(feature = "shot")]
+mod shot;
 mod stats;
 mod sys;
+mod ui;
 mod waiting;
 mod wayland;
 
@@ -32,12 +39,14 @@ fn main() {
         [] => desktop::run(),
         ["peek"] => cmd::signal(sys::SIGUSR1),
         ["unpeek"] => cmd::signal(sys::SIGUSR2),
-        ["pick"] => cmd::pick(),
-        ["new"] => cmd::new(),
+        ["pick"] => cmd::ask(cmd::PICK),
+        ["new"] => cmd::ask(cmd::NEW),
         ["next"] => cmd::next(),
-        ["kill"] => cmd::kill(),
+        ["kill"] => cmd::ask(cmd::END),
         ["view", addr] => cmd::view(addr),
         ["waiting"] => waiting::run(),
+        #[cfg(feature = "shot")]
+        ["shot", ..] => shot::run(&args[1..]),
         _ => {
             eprintln!("usage: lookout [peek|unpeek|pick|new|next|kill|view <address>|waiting]");
             exit(2);

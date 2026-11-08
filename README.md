@@ -5,7 +5,7 @@
  - `sudo tailscale up [--ssh]`
  - `start-hyprland`
  - `claude`, `/remote-control`
- - `lookout/glyphs.sh`
+ - `lookout/glyphs.sh`, `cargo run --release --features shot -- shot out.png --peek` to see the bar without restarting it
  - Agents: `hc` (`hc ls`, `hc attach`), XPS once: `hc machine add desktop --name desktop`
  - PC: `aux`, `speakers`
  - XPS: `gpu`, `gpu-on`, `gpu-off`, `prime-run`, `battery-health`
@@ -15,7 +15,7 @@
  - `SUPER` + `D` foot, `W` brave, `C` code, `S` spotify, `M` prism, `G` steam (XPS)
  - `SUPER` + `SHIFT` + `S` region screenshot, `Print` full
  - `SUPER` + `1-0` workspace, `SHIFT` to move, drag/`SHIFT` drag to move/resize
- - Agents: hold `SUPER` to peek, `SUPER` + `A` pick, `SHIFT` + `A` new, `N` next that wants you, `CTRL` + `Q` end it.
+ - Agents: click a tab in the bar to go to it, click the bar or hold `SUPER` for every agent in detail, `SUPER` + `A` the same sheet as a search (type to narrow, Enter, Esc or `SUPER` to close), `SHIFT` + `A` new, `N` next that wants you, `SHIFT` + `Q` end it.
    `SUPER` + `Q` only closes the window, `Ctrl+\` detaches. After a reboot agents come back as shells, pick
    marks them `resume`
 

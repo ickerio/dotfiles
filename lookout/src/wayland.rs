@@ -2,7 +2,8 @@
 //! https://wayland.freedesktop.org/docs/html/ch04.html#sect-Protocol-Wire-Format
 
 use std::env;
-use std::io::{self, Read, Write};
+use std::collections::VecDeque;
+use std::io::{self, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -58,6 +59,8 @@ pub struct Conn {
     sock: UnixStream,
     inbuf: Vec<u8>,
     next_id: u32,
+    /// File descriptors that came with events, in order, for the events that carry one to take
+    fds: VecDeque<RawFd>,
 }
 
 impl Conn {
@@ -66,11 +69,16 @@ impl Conn {
         let display = env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into());
         // An absolute WAYLAND_DISPLAY replaces the runtime dir
         let path = PathBuf::from(runtime).join(display);
-        Ok(Conn { sock: UnixStream::connect(path)?, inbuf: Vec::new(), next_id: DISPLAY + 1 })
+        Ok(Conn { sock: UnixStream::connect(path)?, inbuf: Vec::new(), next_id: DISPLAY + 1, fds: VecDeque::new() })
     }
 
     pub fn fd(&self) -> RawFd {
         self.sock.as_raw_fd()
+    }
+
+    /// The next file descriptor that came with an event, for an event that carries one (wl_keyboard.keymap)
+    pub fn take_fd(&mut self) -> Option<RawFd> {
+        self.fds.pop_front()
     }
 
     pub fn new_id(&mut self) -> u32 {
@@ -94,9 +102,13 @@ impl Conn {
     /// Blocks until something arrives, then returns every complete message
     pub fn read_events(&mut self) -> Vec<Event> {
         let mut buf = [0u8; 4096];
-        match self.sock.read(&mut buf) {
-            Ok(0) => lost(io::Error::other("compositor closed the connection")),
-            Ok(n) => self.inbuf.extend_from_slice(&buf[..n]),
+        match sys::recv_with_fds(self.sock.as_raw_fd(), &mut buf) {
+            Ok((0, _)) => lost(io::Error::other("compositor closed the connection")),
+            Ok((n, fds)) => {
+                self.inbuf.extend_from_slice(&buf[..n]);
+                self.fds.extend(fds);
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
             Err(err) => lost(err),
         }
 

@@ -1,70 +1,53 @@
-//! The board in the sky left of the wallpaper's mountain: the clock, the stats, then every agent. Hold SUPER to peek
-//! at it over the windows. When an agent wants you and you're not peeking, one line says so in the top right corner
+//! The bar across the top of the screen with every agent on it, the sheet that drops from it while SUPER is held
+//! or after a click, and the line that stands in for the bar over a fullscreen window. See ui.rs for what they
+//! show; this is the Wayland side. Clicking an agent's tab, or its row in the sheet, goes to its window
 
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io;
-use std::os::fd::AsRawFd;
+use std::fs::File;
+use std::io::{self, PipeReader, PipeWriter, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::fs::FileExt;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::path::PathBuf;
 use std::process::exit;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::agents::{Agent, Agents};
 use crate::cmd;
-use crate::font::{Size, CHECKER, MARK_ADVANCE, OUTLINE, SOLID, SPARSE};
+use crate::draw::Canvas;
+use crate::hc;
 use crate::hypr::{self, Hypr};
+use crate::keys::{self, Keys};
+use crate::picker::{self, Action, Mode, Picker, Shows};
 use crate::stats::{Item, Stats};
-use crate::sys::{self, Map, PollFd, POLLIN, SIGUSR1, SIGUSR2};
+use crate::sys::{self, Map, PollFd, POLLIN, SIGCMD, SIGUSR1, SIGUSR2};
+use crate::ui::{self, Hit, View, BAR_H, SHEET_W};
 use crate::wayland::{Arg, Conn, Event, DISPLAY};
 
-const REFRESH: Duration = Duration::from_secs(1);
-/// How long SUPER is held before the board peeks. Hyprland's own long press waits a whole key repeat delay
+/// How often the stats are read again. The bar is only drawn again if what it says changed
+const REFRESH: Duration = Duration::from_secs(5);
+/// How long SUPER is held before the sheet drops. Hyprland's own long press waits a whole key repeat delay
 const PEEK_DELAY: Duration = Duration::from_millis(200);
+/// How long a pill shows brighter after its agent starts wanting you
+const FLASH: Duration = Duration::from_millis(900);
+/// How long the projects found last are trusted before every machine is asked again
+const PROJECTS_FRESH: Duration = Duration::from_secs(60);
+/// How long the picker waits to be given the keyboard before closing, rather than stay open unable to hear Esc
+const KEYBOARD_WAIT: Duration = Duration::from_secs(1);
+/// The line over a fullscreen window
+const LINE_H: i32 = 2;
 
-/// Left edge of the stats and their vertical middle, as fractions of the screen: the empty sky left of the mountain.
-/// Agents hang below
-const LEFT: f32 = 0.2;
-const MIDDLE: f32 = 1.0 / 3.0;
-/// Pixels between lines, on top of the font's own spacing
-const LINE_GAP: i32 = 4;
-/// Labels are padded to this many characters so the values line up. Agents use the same columns: their state is
-/// the label, their name the value
-const LABEL_COLS: usize = 5;
-/// Agent names are cut to this, and what one says in the alert to NOTE_COLS
-const NAME_COLS: usize = 12;
-const NOTE_COLS: usize = 36;
-/// Agents listed when peeking before the rest become "+N more". Peeking is for detail, so it's generous
-const MAX_AGENTS: usize = 12;
-/// Dithered pixel markers before each agent, like the wallpaper's mountain
-const MARKERS: bool = true;
-/// On the wallpaper, agents are one line of markers and counts. Their names are for when you peek
-const SUMMARY: bool = true;
-/// Room around the board's text, where its panel shows while peeking
-const PAD: i32 = 28;
-/// The panel's edge from the nearest ink on every side, measured from what's drawn rather than the glyphs' cells
-const INSET: i32 = 24;
-/// The alert's gap from the screen's corner, the same as Hyprland's outer gap so it lines up with windows
-const ALERT_MARGIN: i32 = 6;
-/// Extra space between the stats and the agents, so the gap matches the one under the clock
-const SECTION_GAP: i32 = 13;
-
-/// Colours as 0xRRGGBB. The wallpaper's white is about 230 grey. Brightness is how much something wants you, and
-/// amber, the only colour, is an agent asking you something
-const LABEL: u32 = 0x828282;
-const VALUE: u32 = 0xe6e6e6;
-/// The quietest grey: which machine an agent is on, and agents that ask nothing (idle, or done and seen)
-const DEVICE: u32 = 0x5a5a5a;
-const ASK: u32 = 0xf0b44c;
-const ERROR: u32 = 0xf05545;
-/// Premultiplied ARGB behind the text when it's over windows: the wallpaper's black, solid so nothing shows through
-const PANEL: u32 = 0xff000000;
-
-/// Runs of text, each with its font size and colour, sharing a baseline
-type Line = Vec<(Size, String, u32)>;
-
-// Wayland layers and opcodes, see wlr-layer-shell-unstable-v1.xml
-const BOTTOM: u32 = 1;
+// Wayland layers, opcodes and constants, see wlr-layer-shell-unstable-v1.xml, cursor-shape-v1.xml and wayland.xml
+const TOP: u32 = 2;
 const OVERLAY: u32 = 3;
+const COMPOSITOR_CREATE_SURFACE: u16 = 0;
+const COMPOSITOR_CREATE_REGION: u16 = 1;
+const REGION_DESTROY: u16 = 0;
+const REGION_ADD: u16 = 1;
+const SURFACE_DESTROY: u16 = 0;
 const SURFACE_ATTACH: u16 = 1;
 const SURFACE_DAMAGE: u16 = 2;
 const SURFACE_SET_INPUT_REGION: u16 = 5;
@@ -73,33 +56,46 @@ const LAYER_SET_SIZE: u16 = 0;
 const LAYER_SET_ANCHOR: u16 = 1;
 const LAYER_SET_EXCLUSIVE_ZONE: u16 = 2;
 const LAYER_SET_MARGIN: u16 = 3;
+const LAYER_SET_KEYBOARD_INTERACTIVITY: u16 = 4;
 const LAYER_ACK_CONFIGURE: u16 = 6;
 const LAYER_DESTROY: u16 = 7;
-const LAYER_SET_LAYER: u16 = 8;
-const TOP: u32 = 1;
-const LEFT_EDGE: u32 = 4;
-const RIGHT_EDGE: u32 = 8;
-const ALL_EDGES: u32 = 15;
+const ANCHOR_TOP: u32 = 1;
+const ANCHOR_LEFT: u32 = 4;
+const ANCHOR_RIGHT: u32 = 8;
+const SEAT_GET_POINTER: u16 = 0;
+const SEAT_POINTER: u32 = 1;
+const SEAT_KEYBOARD: u32 = 2;
+const SEAT_GET_KEYBOARD: u16 = 1;
+const CURSOR_GET_POINTER: u16 = 1;
+const CURSOR_SET_SHAPE: u16 = 1;
+const CURSOR_DEFAULT: u32 = 1;
+const CURSOR_POINTER: u32 = 4;
+const BTN_LEFT: u32 = 0x110;
 
 pub fn run() -> ! {
     // First, so threads started later (the NVIDIA library starts one) inherit the block and can't take a signal
     // whose default is to end the process
-    let mut signals = sys::signal_file(&[SIGUSR1, SIGUSR2]).unwrap_or_else(|err| fail(&format!("can't take signals: {err}")));
+    let mut signals = sys::signal_file(&[SIGUSR1, SIGUSR2, SIGCMD]).unwrap_or_else(|err| fail(&format!("can't take signals: {err}")));
+    // One bar: starting another (after an install, say) replaces the one running, rather than stack two
+    replace_running();
     // Then where to find this, so a peek during the slow start (the NVIDIA library) waits rather than going nowhere
     write_pid();
     let mut desktop = Desktop::new().unwrap_or_else(|err| fail(&format!("can't start: {err}")));
 
     loop {
         let now = Instant::now();
-        // A board under windows isn't refreshed, so it doesn't wake anything up
-        let tick = desktop.board_visible().then_some(desktop.last_refresh + REFRESH);
-        let wake = [tick, desktop.peek_at, desktop.agents.retry_at(), desktop.hypr.retry_at()];
-        let wake = wake.into_iter().flatten().min();
-        let timeout = wake.map_or(-1, |wake| wake.saturating_duration_since(now).as_millis() as i32);
+        // Nothing's read or drawn while a fullscreen window hides the bar, unless the sheet is open over it
+        let tick = (!desktop.fullscreen || desktop.sheet.show).then(|| (desktop.refreshed + REFRESH).min(next_minute(now)));
+        let flash = desktop.flash.values().min().copied();
+        let repeat = desktop.repeat.map(|(_, at)| at);
+        let deaf = (desktop.picker.is_some() && !desktop.keyboard_entered).then(|| desktop.picker_opened + KEYBOARD_WAIT);
+        let wake = [tick, flash, desktop.peek_at, repeat, deaf, desktop.agents.retry_at(), desktop.hypr.retry_at()];
+        let timeout = wake.into_iter().flatten().min().map_or(-1, |at| at.saturating_duration_since(now).as_millis() as i32 + 1);
 
         let mut fds = vec![
             PollFd { fd: desktop.conn.fd(), events: POLLIN, revents: 0 },
             PollFd { fd: signals.as_raw_fd(), events: POLLIN, revents: 0 },
+            PollFd { fd: desktop.wake.0.as_raw_fd(), events: POLLIN, revents: 0 },
         ];
         let agents_fd = desktop.agents.fd();
         let hypr_fd = desktop.hypr.fd();
@@ -115,13 +111,37 @@ pub fn run() -> ! {
                 desktop.handle(event);
             }
         }
+        if fds[2].revents != 0 {
+            desktop.jobs_done();
+        }
         if fds[1].revents != 0 {
-            for signal in sys::read_signals(&mut signals) {
-                // SUPER went down: peek if it's still held, and nothing has moved, once the delay is up
-                if signal == SIGUSR1 && !desktop.peeking {
+            // In the order they were sent: signals waiting together come lowest number first, so a quick tap's
+            // SUPER up would otherwise always come before its SUPER down
+            let mut waiting = sys::read_signals(&mut signals);
+            waiting.sort_by_key(|(_, when)| *when);
+            for (signal, when) in waiting {
+                if signal == SIGCMD {
+                    desktop.command(when);
+                    continue;
+                }
+                // SUPER went down with the search open: put it all away. Not the SUPER of the SUPER + A that opened
+                // it, which went down before
+                if signal == SIGUSR1 && desktop.picker.is_some() {
+                    if when == 0 || when > desktop.picker_opened_ms {
+                        desktop.close_picker();
+                    }
+                    continue;
+                }
+                // SUPER went down: peek if it's still held, and nothing has moved, once the delay is up. Unless it
+                // went up again after, and that arrived first
+                if signal == SIGUSR1 && !desktop.peeking && (when == 0 || when > desktop.released) {
                     desktop.peek_at.get_or_insert(Instant::now() + PEEK_DELAY);
                 } else if signal == SIGUSR2 {
-                    desktop.peek(false);
+                    desktop.released = desktop.released.max(when);
+                    desktop.peek_at = None;
+                    // Still open if it's being pointed at, to be clicked
+                    let pointed = desktop.hover.is_some_and(|h| h.0 == desktop.sheet.surface);
+                    desktop.set_sheet(false, desktop.pinned && pointed);
                 }
             }
         }
@@ -129,39 +149,69 @@ pub fn run() -> ! {
             desktop.agents_changed();
         }
         if ready(hypr_fd) {
+            let mut moved = false;
             for event in desktop.hypr.read() {
                 match event {
                     hypr::Event::Focus(class) => {
                         if desktop.agents.focus(&class) {
                             desktop.agents_changed();
                         }
-                        desktop.peek(false);
+                        desktop.bar.dirty = true;
+                        // Another window focused puts the picker away, unless it's the picker taking the keyboard
+                        // as it opens
+                        if desktop.picker_opened.elapsed() > Duration::from_millis(300) {
+                            desktop.close_picker();
+                        }
+                        desktop.set_sheet(false, false);
                     }
-                    hypr::Event::Moved => {
-                        desktop.peek(false);
-                        desktop.update_cover();
+                    hypr::Event::Workspace(name) => {
+                        if name != desktop.workspace {
+                            (desktop.workspace, desktop.bar.dirty) = (name, true);
+                        }
                     }
+                    hypr::Event::Moved => moved = true,
                 }
+            }
+            // Once for the lot, since a window opening alone sends several
+            if moved {
+                desktop.peek_at = None;
+                desktop.close_picker();
+                desktop.set_sheet(false, false);
+                desktop.update_fullscreen();
             }
         }
 
         let now = Instant::now();
         if desktop.peek_at.is_some_and(|at| at <= now) {
-            desktop.peek(true);
+            desktop.peek_at = None;
+            desktop.set_sheet(true, desktop.pinned);
+        }
+        let before = desktop.flash.len();
+        desktop.flash.retain(|_, until| *until > now);
+        if desktop.flash.len() != before {
+            desktop.bar.dirty = true;
+        }
+        if deaf.is_some_and(|at| at <= now) {
+            desktop.close_picker();
+        }
+        if let Some((key, at)) = desktop.repeat.filter(|(_, at)| *at <= now) {
+            let every = Duration::from_millis(1000 / desktop.repeat_rate.0.max(1) as u64);
+            desktop.repeat = Some((key, at.max(now - every) + every));
+            desktop.key(key);
         }
         desktop.agents.retry(now);
         desktop.hypr.retry(now);
-        if desktop.board_visible() {
-            if now.duration_since(desktop.last_refresh) >= REFRESH {
-                desktop.refresh(now);
-            }
+        if tick.is_some_and(|at| at <= now) {
+            desktop.refresh(now);
         }
-        // Drawn once even if covered, since a surface that's never been mapped can't be moved over the windows
-        if desktop.board_visible() || !desktop.board.mapped {
-            desktop.board.draw(&mut desktop.conn);
-        }
-        desktop.alert.draw(&mut desktop.conn);
+        desktop.draw();
     }
+}
+
+/// When the clock next turns a minute, so it's never behind by up to a tick
+fn next_minute(now: Instant) -> Instant {
+    let into = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() % 60_000) as u64;
+    now + Duration::from_millis(60_000 - into)
 }
 
 fn fail(msg: &str) -> ! {
@@ -174,174 +224,57 @@ pub fn pid_file() -> PathBuf {
     PathBuf::from(env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into())).join("lookout.pid")
 }
 
+/// Ends the bar already running, if there is one, and waits a moment for it to go so its surfaces are gone first
+fn replace_running() {
+    let Some(pid) = cmd::daemon().filter(|&pid| pid != std::process::id() as i32) else { return };
+    if sys::send_signal(pid, sys::SIGTERM, 0).is_err() {
+        return;
+    }
+    let gone = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < gone && fs::metadata(format!("/proc/{pid}")).is_ok() {
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn write_pid() {
     if let Err(err) = fs::write(pid_file(), std::process::id().to_string()) {
         eprintln!("lookout: can't write {}: {err}", pid_file().display());
     }
 }
 
-struct Buffer {
-    id: u32,
-    busy: bool,
-    /// The lines and background it holds, so only what changed gets drawn again
-    shown: Vec<Line>,
-    shown_bg: u32,
-}
-
 /// Two buffers the size of the surface in one shared pool, drawn into alternately
 struct Pixels {
     map: Map,
     pool: u32,
-    buffers: [Buffer; 2],
+    /// Each buffer's id, and whether the compositor still has it
+    buffers: [(u32, bool); 2],
+    size: (i32, i32),
 }
 
-/// A layer surface showing lines of text
-struct Panel {
+#[derive(Clone, Copy, PartialEq)]
+enum Which {
+    Bar,
+    Sheet,
+    Line,
+}
+
+/// A layer surface, sized once
+struct Surface {
     surface: u32,
     layer: u32,
-    /// Width and height in pixels, padding included
-    size: (i32, i32),
     pixels: Option<Pixels>,
-    text: Vec<Line>,
-    /// Premultiplied ARGB behind the text, 0 for none
-    bg: u32,
-    /// Hug the right edge, with the background only behind the text
-    right: bool,
-    /// Where the text starts: its left edge (from the right edge when hugging it) and its top
-    origin: (i32, i32),
-    /// Lines starting with a marker hang it into this much margin left of the text, so their text lines up with
-    /// the lines without one
-    hang: i32,
-    dirty: bool,
     /// Configured and ready for a buffer
     configured: bool,
-    /// Showing a buffer. Only the alert unmaps, when it has nothing to say, so it costs the compositor nothing
+    /// Showing a buffer
     mapped: bool,
+    /// Whether it should be showing
+    show: bool,
+    dirty: bool,
 }
 
-impl Panel {
-    fn draw(&mut self, conn: &mut Conn) {
-        if !self.dirty || !self.configured {
-            return;
-        }
-        if self.right && self.text.is_empty() {
-            self.dirty = false;
-            if self.mapped {
-                // A null buffer unmaps it. Mapping again starts from a commit without one, then a configure
-                conn.send(self.surface, SURFACE_ATTACH, &[Arg::Obj(0), Arg::Int(0), Arg::Int(0)]);
-                conn.send(self.surface, SURFACE_COMMIT, &[]);
-                conn.send(self.surface, SURFACE_COMMIT, &[]);
-                self.mapped = false;
-                self.configured = false;
-            }
-            return;
-        }
-        let Some(pixels) = &mut self.pixels else { return };
-        // Still dirty if there's no free buffer, the release event wakes the loop to retry
-        let Some(i) = pixels.buffers.iter().position(|b| !b.busy) else { return };
-        self.dirty = false;
-
-        let (w, h) = self.size;
-        let px = &mut pixels.map.pixels()[(i as i32 * w * h) as usize..][..(w * h) as usize];
-        let buffer = &mut pixels.buffers[i];
-        // A background hugs the text, so it's drawn whole whenever there is one
-        let whole = buffer.shown_bg != self.bg || self.bg != 0;
-        // Hugging the right edge, the ink ends INSET from it
-        let x0 = if self.right { w - INSET - ink_box(&self.text, 0, 0, self.hang).2 } else { self.origin.0 + self.hang };
-        let top_y = self.origin.1;
-        if whole {
-            px.fill(0);
-            if self.bg != 0 && !self.text.is_empty() {
-                let (l, t, r, b) = ink_box(&self.text, x0, top_y, self.hang);
-                let (l, t, r, b) = ((l - INSET).max(0), (t - INSET).max(0), (r + INSET).min(w), (b + INSET).min(h));
-                for row in px[(t * w) as usize..(b * w) as usize].chunks_exact_mut(w as usize) {
-                    row[l as usize..r as usize].fill(self.bg);
-                }
-            }
-            conn.send(self.surface, SURFACE_DAMAGE, &[Arg::Int(0), Arg::Int(0), Arg::Int(w), Arg::Int(h)]);
-        }
-
-        let mut y = top_y;
-        for (n, line) in self.text.iter().enumerate() {
-            let (height, baseline) = line_metrics(line);
-            if whole || buffer.shown.get(n) != Some(line) {
-                // A whole redraw has already laid the background
-                if !whole {
-                    for row in px[(y * w) as usize..((y + height) * w) as usize].chunks_exact_mut(w as usize) {
-                        row[PAD as usize..(w - PAD) as usize].fill(self.bg);
-                    }
-                }
-                let mut x = line_start(line, x0, self.hang);
-                for (size, s, colour) in line {
-                    let font = size.font();
-                    for c in s.chars() {
-                        font.draw(px, w, x, y + baseline - font.baseline, c, *colour);
-                        x += font.advance;
-                    }
-                }
-                conn.send(self.surface, SURFACE_DAMAGE, &[Arg::Int(0), Arg::Int(y), Arg::Int(w), Arg::Int(height)]);
-            }
-            y += height + LINE_GAP;
-        }
-        // Lines that went away
-        if !whole && buffer.shown.len() > self.text.len() {
-            let bottom = (h - PAD).max(y);
-            for row in px[(y * w) as usize..(bottom * w) as usize].chunks_exact_mut(w as usize) {
-                row[PAD as usize..(w - PAD) as usize].fill(self.bg);
-            }
-            conn.send(self.surface, SURFACE_DAMAGE, &[Arg::Int(0), Arg::Int(y), Arg::Int(w), Arg::Int(bottom - y)]);
-        }
-
-        conn.send(self.surface, SURFACE_ATTACH, &[Arg::Obj(buffer.id), Arg::Int(0), Arg::Int(0)]);
-        conn.send(self.surface, SURFACE_COMMIT, &[]);
-        self.mapped = true;
-        buffer.busy = true;
-        buffer.shown = self.text.clone();
-        buffer.shown_bg = self.bg;
-    }
-
-    fn set_text(&mut self, text: Vec<Line>) {
-        if text != self.text {
-            self.text = text;
-            self.dirty = true;
-        }
-    }
-
-    fn make_pixels(&mut self, conn: &mut Conn, shm: u32) {
-        // A new memfd starts zeroed, which is transparent
-        let (w, h) = self.size;
-        let size = w * h * 4;
-        let (file, map) = sys::memfd(c"lookout")
-            .and_then(|f| f.set_len(2 * size as u64).map(|_| f))
-            .and_then(|f| Map::new(&f, 2 * size as usize).map(|m| (f, m)))
-            .unwrap_or_else(|err| fail(&format!("can't make the pixel buffer: {err}")));
-        let pool = conn.new_id();
-        conn.send_fd(shm, 0, &[Arg::Uint(pool), Arg::Int(2 * size)], file.as_raw_fd());
-        let buffers = [0, 1].map(|i| {
-            let id = conn.new_id();
-            const ARGB8888: u32 = 0;
-            conn.send(pool, 0, &[Arg::Uint(id), Arg::Int(i * size), Arg::Int(w), Arg::Int(h), Arg::Int(w * 4), Arg::Uint(ARGB8888)]);
-            Buffer { id, busy: false, shown: Vec::new(), shown_bg: 0 }
-        });
-        self.pixels = Some(Pixels { map, pool, buffers });
-        self.dirty = true;
-    }
-
-    fn drop_pixels(&mut self, conn: &mut Conn) {
-        if let Some(pixels) = self.pixels.take() {
-            for buffer in pixels.buffers {
-                conn.send(buffer.id, 0, &[]);
-            }
-            conn.send(pixels.pool, 1, &[]);
-        }
-    }
-
-    fn release(&mut self, obj: u32) {
-        for buffer in self.pixels.iter_mut().flat_map(|p| &mut p.buffers) {
-            if buffer.id == obj {
-                buffer.busy = false;
-            }
-        }
+impl Surface {
+    fn new() -> Surface {
+        Surface { surface: 0, layer: 0, pixels: None, configured: false, mapped: false, show: false, dirty: true }
     }
 }
 
@@ -350,23 +283,83 @@ struct Desktop {
     compositor: u32,
     shm: u32,
     layer_shell: u32,
-    /// Empty input region, so clicks go through to whatever's underneath
-    region: u32,
-    board: Panel,
-    alert: Panel,
-    /// Width and height of the screen, from the board's first configure while it still covers all of it
-    screen: Option<(i32, i32)>,
-    /// Height of the stats alone, which stay centred where they always were
-    stats_height: i32,
+    seat: u32,
+    pointer: Option<u32>,
+    /// Sets the pointer's shape over the bar, None if the compositor can't
+    cursor_shape: Option<u32>,
+    cursor_device: Option<u32>,
+    bar: Surface,
+    sheet: Surface,
+    line: Surface,
+    /// The surface the pointer's over, where on it, and the serial its arrival came with
+    hover: Option<(u32, i32, i32)>,
+    /// The surface and hit the pointer was last over, to redraw only when that changes
+    hovered: Option<(u32, usize)>,
+    enter_serial: u32,
+    cursor: u32,
+    /// What clicking where does on the bar (spans of x) and the sheet (spans of y), from their last drawing
+    bar_hits: Vec<(i32, i32, Hit)>,
+    sheet_hits: Vec<(i32, i32, Hit)>,
+    /// The sheet's open while SUPER is held, or pinned open by a click on the bar
     peeking: bool,
+    pinned: bool,
     /// When a peek that's waiting out PEEK_DELAY shows, unless SUPER is let go or something moves first
     peek_at: Option<Instant>,
-    /// Windows cover the board, so there's no point refreshing it
-    covered: bool,
-    last_refresh: Instant,
+    /// When SUPER was last let go, by sys::monotonic_ms
+    released: u64,
+    /// A fullscreen window hides the bar, so the line shows instead
+    fullscreen: bool,
+    /// The name of the workspace showing
+    workspace: String,
     stats: Stats,
+    items: Vec<Item>,
+    clock: (String, String),
+    refreshed: Instant,
     agents: Agents,
+    /// The agents in the bar's order
+    list: Vec<Agent>,
+    /// Agents that just started wanting you, until when their pill shows brighter
+    flash: HashMap<String, Instant>,
+    wanting: HashSet<String>,
+    /// The first list from hc has arrived, so what wants you after it is news
+    started: bool,
+    sheet_height: i32,
     hypr: Hypr,
+    keyboard: Option<u32>,
+    keys: Keys,
+    /// A key held down, and when it next repeats
+    repeat: Option<(u32, Instant)>,
+    /// Repeats a second, and the wait before they start, in ms
+    repeat_rate: (i32, i32),
+    /// The picker, while it's open, and when it opened
+    picker: Option<Picker>,
+    picker_opened: Instant,
+    /// The same, by sys::monotonic_ms, to tell the SUPER that opened it from a press after
+    picker_opened_ms: u64,
+    /// Slow work done off the loop sends what it found here, then wakes the loop with a byte down the pipe
+    jobs: (Sender<Job>, Receiver<Job>),
+    wake: (PipeReader, PipeWriter),
+    /// What the last look at the terminals that report nothing found, and every project, for the picker to start
+    /// from while it looks again
+    shells: (HashMap<String, cmd::Detail>, HashMap<String, String>),
+    projects: Option<Vec<(Option<String>, String)>>,
+    /// When every machine last answered with its projects, and whether they're being asked now
+    projects_found: Option<Instant>,
+    projects_asking: bool,
+    /// How many looks at the shells have been asked for, and which last answered
+    shells_asked: u64,
+    shells_answered: u64,
+    /// The picker has the keyboard. If it hasn't soon after opening, it closes rather than sit there unable to hear
+    keyboard_entered: bool,
+}
+
+/// What slow work done off the loop found
+enum Job {
+    Shells(u64, HashMap<String, cmd::Detail>, HashMap<String, String>),
+    Projects(Vec<(Option<String>, String)>),
+    Failed(String),
+    /// Nothing to show for it
+    Done,
 }
 
 impl Desktop {
@@ -391,66 +384,152 @@ impl Desktop {
 
         let compositor = bind(&mut conn, registry, &globals, "wl_compositor", 4)?;
         let shm = bind(&mut conn, registry, &globals, "wl_shm", 1)?;
-        // Version 2 can move a surface between layers, which is how peeking works
         let layer_shell = bind(&mut conn, registry, &globals, "zwlr_layer_shell_v1", 2)?;
-        let region = conn.new_id();
-        conn.send(compositor, 1, &[Arg::Uint(region)]);
+        let seat = bind(&mut conn, registry, &globals, "wl_seat", 5)?;
+        let cursor_shape = bind(&mut conn, registry, &globals, "wp_cursor_shape_manager_v1", 1).ok();
 
-        // Sized once for the widest values and the most agents, so nothing jumps around
         let stats = Stats::new();
-        let mut widest = stats_layout(&stats.widest());
-        let stats_height = text_size(&widest).1;
-        widest.push(spacer());
-        widest.extend((0..MAX_AGENTS).map(|_| agent_line(&widest_agent(), NAME_COLS, 8)));
-        let (board_w, board_h) = text_size(&widest);
-        // The alert is sized and placed by its ink, so its panel is even on every side
-        let alert = [alert_line(&widest_agent(), 99)];
-        let (l, t, r, b) = ink_box(&alert, 0, 0, 0);
-        let alert_origin = (INSET - l, INSET - t);
-        let alert_size = (r - l + 2 * INSET, b - t + 2 * INSET);
-
-        let panel = |size, right, origin, hang| Panel {
-            surface: 0,
-            layer: 0,
-            size,
-            pixels: None,
-            text: Vec::new(),
-            bg: 0,
-            right,
-            origin,
-            hang,
-            dirty: false,
-            configured: false,
-            mapped: false,
-        };
-        let focused = hypr::focused_class();
+        let (hypr, focused) = Hypr::new();
         let mut desktop = Desktop {
             conn,
             compositor,
             shm,
             layer_shell,
-            region,
-            board: panel((hang() + board_w + 2 * PAD, board_h + 2 * PAD), false, (PAD, PAD), hang()),
-            alert: panel(alert_size, true, alert_origin, 0),
-            screen: None,
-            stats_height,
+            seat,
+            pointer: None,
+            cursor_shape,
+            cursor_device: None,
+            bar: Surface::new(),
+            sheet: Surface::new(),
+            line: Surface::new(),
+            hover: None,
+            hovered: None,
+            enter_serial: 0,
+            cursor: 0,
+            bar_hits: Vec::new(),
+            sheet_hits: Vec::new(),
             peeking: false,
+            pinned: false,
             peek_at: None,
-            covered: hypr::covered(),
-            last_refresh: Instant::now(),
+            released: 0,
+            fullscreen: hypr::fullscreen(),
+            workspace: hypr::workspace(),
+            clock: stats.clock(),
             stats,
+            items: Vec::new(),
+            refreshed: Instant::now(),
             agents: Agents::new(),
-            hypr: Hypr::new(),
+            list: Vec::new(),
+            flash: HashMap::new(),
+            wanting: HashSet::new(),
+            started: false,
+            sheet_height: 0,
+            hypr,
+            keyboard: None,
+            keys: Keys::new(),
+            repeat: None,
+            repeat_rate: (25, 600),
+            picker: None,
+            picker_opened: Instant::now(),
+            picker_opened_ms: 0,
+            jobs: mpsc::channel(),
+            wake: io::pipe()?,
+            shells: (HashMap::new(), HashMap::new()),
+            projects: None,
+            projects_found: None,
+            projects_asking: false,
+            shells_asked: 0,
+            shells_answered: 0,
+            keyboard_entered: false,
         };
         if let Some(class) = focused {
             desktop.agents.focus(&class);
         }
-        // The first CPU reading is "-", it needs a second sample to compare against
-        let text = desktop.board_text();
-        desktop.board.set_text(text);
-        desktop.create_board();
-        desktop.create_alert();
+        // The first CPU reading is "-", it needs a second sample to compare against, so the next one is soon
+        desktop.items = desktop.stats.items();
+        desktop.refreshed = Instant::now().checked_sub(REFRESH - Duration::from_secs(1)).unwrap_or(desktop.refreshed);
+        desktop.bar.show = true;
+        for which in [Which::Bar, Which::Sheet, Which::Line] {
+            desktop.create(which);
+        }
         Ok(desktop)
+    }
+
+    fn surf(&mut self, which: Which) -> &mut Surface {
+        match which {
+            Which::Bar => &mut self.bar,
+            Which::Sheet => &mut self.sheet,
+            Which::Line => &mut self.line,
+        }
+    }
+
+    fn which(&self, obj: u32) -> Option<Which> {
+        [(self.bar.layer, Which::Bar), (self.sheet.layer, Which::Sheet), (self.line.layer, Which::Line)]
+            .into_iter()
+            .find(|(layer, _)| *layer == obj)
+            .map(|(_, which)| which)
+    }
+
+    fn create(&mut self, which: Which) {
+        let surface = self.conn.new_id();
+        self.conn.send(self.compositor, COMPOSITOR_CREATE_SURFACE, &[Arg::Uint(surface)]);
+        let layer = self.conn.new_id();
+        let level = if which == Which::Bar { TOP } else { OVERLAY };
+        // Null output lets the compositor pick, which is the focused one
+        self.conn.send(self.layer_shell, 0, &[Arg::Uint(layer), Arg::Obj(surface), Arg::Obj(0), Arg::Uint(level), Arg::Str("lookout")]);
+        let (anchor, size, zone, margin) = match which {
+            // The bar takes its height from the top of the screen, so windows tile below it
+            Which::Bar => (ANCHOR_TOP | ANCHOR_LEFT | ANCHOR_RIGHT, (0, BAR_H), BAR_H, 0),
+            // The sheet floats under the bar, over the windows, as far from it and the edge as windows are
+            // Anchored to the top only, so it's centred across the screen
+            Which::Sheet => (ANCHOR_TOP, (SHEET_W, ui::sheet_max_height()), -1, ui::SHEET_Y),
+            Which::Line => (ANCHOR_TOP | ANCHOR_LEFT | ANCHOR_RIGHT, (0, LINE_H), -1, 0),
+        };
+        self.conn.send(layer, LAYER_SET_SIZE, &[Arg::Uint(size.0 as u32), Arg::Uint(size.1 as u32)]);
+        self.conn.send(layer, LAYER_SET_ANCHOR, &[Arg::Uint(anchor)]);
+        self.conn.send(layer, LAYER_SET_EXCLUSIVE_ZONE, &[Arg::Int(zone)]);
+        // Never the keyboard: it's the protocol's default, said outright so no surface of lookout's can come between
+        // the keys and the compositor's binds
+        self.conn.send(layer, LAYER_SET_KEYBOARD_INTERACTIVITY, &[Arg::Uint(0)]);
+        self.conn.send(layer, LAYER_SET_MARGIN, &[Arg::Int(margin), Arg::Int(0), Arg::Int(0), Arg::Int(0)]);
+        // The line is only to be seen, clicks go through it to the window
+        if which == Which::Line {
+            let region = self.region(0, 0);
+            self.conn.send(surface, SURFACE_SET_INPUT_REGION, &[Arg::Obj(region)]);
+            self.conn.send(region, REGION_DESTROY, &[]);
+        }
+        self.conn.send(surface, SURFACE_COMMIT, &[]);
+        let surf = self.surf(which);
+        (surf.surface, surf.layer, surf.configured, surf.mapped, surf.dirty) = (surface, layer, false, false, true);
+        // A new surface has no input region yet
+        if which == Which::Sheet {
+            self.sheet_height = 0;
+        }
+    }
+
+    /// A region of the top left `w` by `h`, to be destroyed once it's been used
+    fn region(&mut self, w: i32, h: i32) -> u32 {
+        let region = self.conn.new_id();
+        self.conn.send(self.compositor, COMPOSITOR_CREATE_REGION, &[Arg::Uint(region)]);
+        if w > 0 && h > 0 {
+            self.conn.send(region, REGION_ADD, &[Arg::Int(0), Arg::Int(0), Arg::Int(w), Arg::Int(h)]);
+        }
+        region
+    }
+
+    fn destroy(&mut self, which: Which) {
+        let (surface, layer, pixels) = {
+            let surf = self.surf(which);
+            (surf.surface, surf.layer, surf.pixels.take())
+        };
+        self.conn.send(layer, LAYER_DESTROY, &[]);
+        self.conn.send(surface, SURFACE_DESTROY, &[]);
+        if let Some(pixels) = pixels {
+            for (id, _) in pixels.buffers {
+                self.conn.send(id, 0, &[]);
+            }
+            self.conn.send(pixels.pool, 1, &[]);
+        }
     }
 
     fn handle(&mut self, event: Event) {
@@ -459,187 +538,612 @@ impl Desktop {
             let (obj, code, msg) = (args.uint(), args.uint(), args.string());
             fail(&format!("wayland error on object {obj} (code {code}): {msg}"));
         }
-        if event.obj == self.board.layer {
+        if let Some(which) = self.which(event.obj) {
             match event.op {
                 // configure: ack it, then the next commit can carry a buffer
                 0 => {
-                    let (serial, width, height) = (args.uint(), args.uint() as i32, args.uint() as i32);
-                    self.conn.send(self.board.layer, LAYER_ACK_CONFIGURE, &[Arg::Uint(serial)]);
-                    if self.screen.is_none() {
-                        self.screen = Some((width, height));
-                        self.shrink_board(width, height);
-                    } else if self.board.pixels.is_none() {
-                        self.board.make_pixels(&mut self.conn, self.shm);
-                        self.board.configured = true;
+                    let (serial, w) = (args.uint(), args.uint() as i32);
+                    let layer = self.surf(which).layer;
+                    self.conn.send(layer, LAYER_ACK_CONFIGURE, &[Arg::Uint(serial)]);
+                    let fixed = match which {
+                        Which::Sheet => (SHEET_W, ui::sheet_max_height()),
+                        Which::Bar => (w, BAR_H),
+                        Which::Line => (w, LINE_H),
+                    };
+                    if self.surf(which).pixels.as_ref().is_none_or(|p| p.size != fixed) {
+                        self.make_pixels(which, fixed);
                     }
+                    let surf = self.surf(which);
+                    (surf.configured, surf.dirty) = (true, true);
                 }
-                // closed by the compositor, e.g. the output went away, so start over on whichever is focused
+                // closed by the compositor, e.g. the output went away, so start over on whichever is focused. Not
+                // with the picker open, since the new surface wouldn't have the keyboard
                 1 => {
-                    self.destroy(true);
-                    self.screen = None;
-                    self.create_board();
+                    self.close_picker();
+                    self.destroy(which);
+                    self.create(which);
                 }
                 _ => {}
             }
             return;
         }
-        if event.obj == self.alert.layer {
-            match event.op {
-                0 => {
-                    let serial = args.uint();
-                    self.conn.send(self.alert.layer, LAYER_ACK_CONFIGURE, &[Arg::Uint(serial)]);
-                    if self.alert.pixels.is_none() {
-                        self.alert.make_pixels(&mut self.conn, self.shm);
-                    }
-                    self.alert.configured = true;
-                    self.alert.dirty = true;
-                }
-                1 => {
-                    self.destroy(false);
-                    self.create_alert();
-                }
-                _ => {}
+        if event.obj == self.seat {
+            // capabilities: a pointer to click the bar with, and a keyboard to type into the picker
+            let caps = if event.op == 0 { args.uint() } else { 0 };
+            if caps & SEAT_KEYBOARD != 0 && self.keyboard.is_none() {
+                let keyboard = self.conn.new_id();
+                self.conn.send(self.seat, SEAT_GET_KEYBOARD, &[Arg::Uint(keyboard)]);
+                self.keyboard = Some(keyboard);
             }
+            if caps & SEAT_POINTER != 0 && self.pointer.is_none() {
+                let pointer = self.conn.new_id();
+                self.conn.send(self.seat, SEAT_GET_POINTER, &[Arg::Uint(pointer)]);
+                self.pointer = Some(pointer);
+                if let Some(manager) = self.cursor_shape {
+                    let device = self.conn.new_id();
+                    self.conn.send(manager, CURSOR_GET_POINTER, &[Arg::Uint(device), Arg::Obj(pointer)]);
+                    self.cursor_device = Some(device);
+                }
+            }
+            return;
+        }
+        if Some(event.obj) == self.pointer {
+            self.pointer_event(event.op, &mut args);
+            return;
+        }
+        if Some(event.obj) == self.keyboard {
+            self.keyboard_event(event.op, &mut args);
             return;
         }
         // wl_buffer.release
         if event.op == 0 {
-            self.board.release(event.obj);
-            self.alert.release(event.obj);
+            for pixels in [&mut self.bar.pixels, &mut self.sheet.pixels, &mut self.line.pixels].into_iter().flatten() {
+                for (id, busy) in &mut pixels.buffers {
+                    if *id == event.obj {
+                        *busy = false;
+                    }
+                }
+            }
         }
     }
 
-    fn layer_surface(&mut self, layer: u32) -> (u32, u32) {
-        let surface = self.conn.new_id();
-        self.conn.send(self.compositor, 0, &[Arg::Uint(surface)]);
-        let layer_surface = self.conn.new_id();
-        // Null output lets the compositor pick, which is the focused one
-        self.conn.send(
-            self.layer_shell,
-            0,
-            &[Arg::Uint(layer_surface), Arg::Obj(surface), Arg::Obj(0), Arg::Uint(layer), Arg::Str("lookout")],
-        );
-        // -1: measure from the screen's edges even if a bar reserves space
-        self.conn.send(layer_surface, LAYER_SET_EXCLUSIVE_ZONE, &[Arg::Int(-1)]);
-        self.conn.send(surface, SURFACE_SET_INPUT_REGION, &[Arg::Obj(self.region)]);
-        (surface, layer_surface)
+    fn pointer_event(&mut self, op: u16, args: &mut crate::wayland::Args) {
+        let fixed = |v: u32| v as i32 / 256;
+        match op {
+            // enter
+            0 => {
+                let (serial, surface, x, y) = (args.uint(), args.uint(), args.uint(), args.uint());
+                (self.enter_serial, self.cursor) = (serial, 0);
+                self.hover = Some((surface, fixed(x), fixed(y)));
+            }
+            // leave: off the sheet closes it, like a menu, unless SUPER's still held
+            1 => {
+                let left = self.hover.take().map(|h| h.0);
+                if left == Some(self.sheet.surface) && self.sheet.show {
+                    self.set_sheet(self.peeking, false);
+                }
+            }
+            // motion
+            2 => {
+                let (_, x, y) = (args.uint(), args.uint(), args.uint());
+                if let Some((surface, ..)) = self.hover {
+                    self.hover = Some((surface, fixed(x), fixed(y)));
+                    // Moving onto the sheet keeps it open after SUPER is let go, to click a row without SUPER held,
+                    // since SUPER + click drags the window under it. Only moving: a sheet that drops open under a
+                    // pointer resting there still goes away with SUPER
+                    if surface == self.sheet.surface && self.sheet.show {
+                        self.pinned = true;
+                    }
+                }
+            }
+            // button
+            3 => {
+                let (_, _, button, state) = (args.uint(), args.uint(), args.uint(), args.uint());
+                if button == BTN_LEFT && state == 1 {
+                    self.click();
+                }
+                return;
+            }
+            _ => return,
+        }
+        // Drawn again only if the pointer moved onto something else
+        let (hit, pointed) = match self.hit() {
+            Some((n, hit)) => (Some((n, !matches!(hit, Hit::Sheet))), if let Hit::Row(i, _) = hit { Some(*i) } else { None }),
+            None => (None, None),
+        };
+        let over = self.hover.map(|h| h.0).zip(hit.map(|h| h.0));
+        if over != self.hovered {
+            // Searching, moving onto a row chooses it, so Enter and a click agree. Only moving onto one, so a nudge
+            // doesn't undo the arrow keys, and never in a question, where keeping is the choice until you move off it
+            if let (Some(picker), Some(i)) = (self.picker.as_mut().filter(|p| p.mode != Mode::End), pointed) {
+                picker.select(i);
+            }
+            for (surface, _) in [over, self.hovered].into_iter().flatten() {
+                if surface == self.bar.surface {
+                    self.bar.dirty = true;
+                } else if surface == self.sheet.surface {
+                    self.sheet.dirty = true;
+                }
+            }
+            self.hovered = over;
+        }
+        // A hand over what can be clicked
+        let shape = if self.hover.is_some_and(|h| h.0 == self.bar.surface) || hit.is_some_and(|h| h.1) { CURSOR_POINTER } else { CURSOR_DEFAULT };
+        if let (Some(device), true) = (self.cursor_device, self.hover.is_some() && shape != self.cursor) {
+            self.cursor = shape;
+            self.conn.send(device, CURSOR_SET_SHAPE, &[Arg::Uint(self.enter_serial), Arg::Uint(shape)]);
+        }
     }
 
-    fn create_board(&mut self) {
-        let layer = if self.peeking { OVERLAY } else { BOTTOM };
-        let (surface, layer) = self.layer_surface(layer);
-        // Size 0 anchored to every edge is the whole screen, the first configure says how big that is
-        self.conn.send(layer, LAYER_SET_SIZE, &[Arg::Uint(0), Arg::Uint(0)]);
-        self.conn.send(layer, LAYER_SET_ANCHOR, &[Arg::Uint(ALL_EDGES)]);
-        self.conn.send(surface, SURFACE_COMMIT, &[]);
-        (self.board.surface, self.board.layer) = (surface, layer);
+    /// What's under the pointer, and its place in the hits
+    fn hit(&self) -> Option<(usize, &Hit)> {
+        let (surface, x, y) = self.hover?;
+        let (hits, at) = if surface == self.bar.surface {
+            (&self.bar_hits, x)
+        } else if surface == self.sheet.surface && self.sheet.mapped {
+            (&self.sheet_hits, y)
+        } else {
+            return None;
+        };
+        hits.iter().enumerate().find(|(_, (from, to, _))| at >= *from && at < *to).map(|(i, (.., hit))| (i, hit))
     }
 
-    /// Shrinks the board from the whole screen to its own size, with the stats in their place in the sky
-    fn shrink_board(&mut self, screen_w: i32, screen_h: i32) {
-        let (w, h) = self.board.size;
-        let left = (screen_w as f32 * LEFT) as i32 - PAD - self.board.hang;
-        let top = ((screen_h as f32 * MIDDLE) as i32 - self.stats_height / 2 - PAD).max(0);
-        let layer = self.board.layer;
-        self.conn.send(layer, LAYER_SET_SIZE, &[Arg::Uint(w as u32), Arg::Uint(h as u32)]);
-        self.conn.send(layer, LAYER_SET_ANCHOR, &[Arg::Uint(TOP | LEFT_EDGE)]);
-        self.conn.send(layer, LAYER_SET_MARGIN, &[Arg::Int(top), Arg::Int(0), Arg::Int(0), Arg::Int(left.max(0))]);
-        self.conn.send(self.board.surface, SURFACE_COMMIT, &[]);
+    fn click(&mut self) {
+        match self.hit().map(|(_, hit)| hit.clone()) {
+            Some(Hit::Do(action) | Hit::Row(_, action)) => {
+                self.set_sheet(false, false);
+                self.act(action);
+            }
+            // The bar puts a search away, or opens or closes the sheet
+            Some(Hit::Sheet) if self.picker.is_some() => self.close_picker(),
+            Some(Hit::Sheet) => self.set_sheet(self.peeking, !self.pinned),
+            Some(Hit::Search) => self.open_search(),
+            None => {}
+        }
     }
 
-    fn create_alert(&mut self) {
-        let (surface, layer) = self.layer_surface(OVERLAY);
-        let (w, h) = self.alert.size;
-        self.conn.send(layer, LAYER_SET_SIZE, &[Arg::Uint(w as u32), Arg::Uint(h as u32)]);
-        self.conn.send(layer, LAYER_SET_ANCHOR, &[Arg::Uint(TOP | RIGHT_EDGE)]);
-        let m = ALERT_MARGIN;
-        self.conn.send(layer, LAYER_SET_MARGIN, &[Arg::Int(m), Arg::Int(m), Arg::Int(0), Arg::Int(0)]);
-        self.conn.send(surface, SURFACE_COMMIT, &[]);
-        (self.alert.surface, self.alert.layer) = (surface, layer);
-        self.alert.bg = PANEL;
+    fn make_pixels(&mut self, which: Which, size: (i32, i32)) {
+        if let Some(old) = self.surf(which).pixels.take() {
+            for (id, _) in old.buffers {
+                self.conn.send(id, 0, &[]);
+            }
+            self.conn.send(old.pool, 1, &[]);
+        }
+        // A new memfd starts zeroed, which is transparent
+        let (w, h) = size;
+        let bytes = w * h * 4;
+        let (file, map) = sys::memfd(c"lookout")
+            .and_then(|f| f.set_len(2 * bytes as u64).map(|_| f))
+            .and_then(|f| Map::new(&f, 2 * bytes as usize).map(|m| (f, m)))
+            .unwrap_or_else(|err| fail(&format!("can't make the pixel buffer: {err}")));
+        let pool = self.conn.new_id();
+        self.conn.send_fd(self.shm, 0, &[Arg::Uint(pool), Arg::Int(2 * bytes)], file.as_raw_fd());
+        let buffers = [0, 1].map(|i| {
+            let id = self.conn.new_id();
+            const ARGB8888: u32 = 0;
+            self.conn.send(pool, 0, &[Arg::Uint(id), Arg::Int(i * bytes), Arg::Int(w), Arg::Int(h), Arg::Int(w * 4), Arg::Uint(ARGB8888)]);
+            (id, false)
+        });
+        self.surf(which).pixels = Some(Pixels { map, pool, buffers, size });
     }
 
-    fn destroy(&mut self, board: bool) {
-        let panel = if board { &mut self.board } else { &mut self.alert };
-        self.conn.send(panel.layer, LAYER_DESTROY, &[]);
-        self.conn.send(panel.surface, 0, &[]);
-        panel.drop_pixels(&mut self.conn);
-        (panel.configured, panel.mapped) = (false, false);
+    /// Opens or closes the sheet: it shows while peeking or pinned
+    fn set_sheet(&mut self, peeking: bool, pinned: bool) {
+        (self.peeking, self.pinned) = (peeking, pinned);
+        let show = peeking || pinned || self.picker.is_some();
+        if show != self.sheet.show {
+            (self.sheet.show, self.sheet.dirty) = (show, true);
+            if show {
+                // Ages in it may be stale
+                self.refresh(Instant::now());
+            }
+        }
     }
 
-    /// Raises the board over the windows with a panel behind it, or puts it back on the wallpaper
-    fn peek(&mut self, on: bool) {
-        self.peek_at = None;
-        if on == self.peeking {
+    /// What `lookout pick`, `new` and `kill` asked for
+    fn command(&mut self, what: u64) {
+        // Asked again for what's open puts it away
+        let open = self.picker.as_ref().map(|p| match p.mode {
+            Mode::Search => cmd::PICK,
+            Mode::Projects => cmd::NEW,
+            Mode::End => cmd::END,
+            Mode::Peek | Mode::Note => 0,
+        });
+        if open == Some(what) {
+            return self.close_picker();
+        }
+        match what {
+            cmd::PICK => self.open_search(),
+            cmd::NEW => self.open_projects(),
+            cmd::END => self.open_end(),
+            _ => {}
+        }
+    }
+
+    /// Shows `picker` in the sheet, with the keyboard for as long as it's open
+    fn open_picker(&mut self, picker: Picker) {
+        // Without a keyboard there'd be no Esc, so no picker
+        if self.keyboard.is_none() {
             return;
         }
-        self.peeking = on;
-        self.conn.send(self.board.layer, LAYER_SET_LAYER, &[Arg::Uint(if on { OVERLAY } else { BOTTOM })]);
-        // Applied now, since a covered board isn't drawn (and committed) until it can be seen again
-        self.conn.send(self.board.surface, SURFACE_COMMIT, &[]);
-        self.board.bg = if on { PANEL } else { 0 };
-        self.board.dirty = true;
-        // The alert says less than the board, so it steps aside
-        self.agents_changed();
+        self.repeat = None;
+        if self.picker.is_none() {
+            self.keyboard_entered = false;
+            self.conn.send(self.sheet.layer, LAYER_SET_KEYBOARD_INTERACTIVITY, &[Arg::Uint(1)]);
+            self.picker_opened = Instant::now();
+            self.picker_opened_ms = sys::monotonic_ms();
+        }
+        self.picker = Some(picker);
+        self.peek_at = None;
+        self.set_sheet(false, false);
+        self.sheet.dirty = true;
     }
 
-    fn board_visible(&self) -> bool {
-        self.peeking || !self.covered
+    /// Puts the picker away and gives the keyboard back
+    fn close_picker(&mut self) {
+        if self.picker.take().is_some() {
+            self.repeat = None;
+            self.conn.send(self.sheet.layer, LAYER_SET_KEYBOARD_INTERACTIVITY, &[Arg::Uint(0)]);
+            self.set_sheet(self.peeking, false);
+            self.sheet.dirty = true;
+        }
     }
 
-    /// Asks Hyprland again whether windows cover the board, after something moved
-    fn update_cover(&mut self) {
-        let was_visible = self.board_visible();
-        self.covered = hypr::covered();
-        if self.board_visible() && !was_visible {
+    /// The agents, as the sheet lists them when it's peeked at
+    fn agent_rows(&self) -> Vec<picker::Row> {
+        let cwd = |addr: &str| self.agents.cwd(addr);
+        picker::agent_rows(&self.list, self.agents.focused(), &cwd)
+    }
+
+    fn search_rows(&self) -> Vec<picker::Row> {
+        let cwd = |addr: &str| self.agents.cwd(addr);
+        let projects = self.projects.as_deref().unwrap_or_default();
+        picker::search_rows(&self.list, &self.agents.others(), self.agents.focused(), &cwd, &self.shells.0, &self.shells.1, projects)
+    }
+
+    /// Asks every machine for its projects again, unless they answered a moment ago or are still answering
+    fn find_projects(&mut self) {
+        if !self.projects_asking && self.projects_found.is_none_or(|at| at.elapsed() > PROJECTS_FRESH) {
+            self.projects_asking = true;
+            self.spawn_job(|| Job::Projects(cmd::projects()));
+        }
+    }
+
+    /// The sheet with a line to type into, straight away from what's known, then again once the shells and projects
+    /// have been looked at
+    fn open_search(&mut self) {
+        let mut picker = Picker::new(Mode::Search, String::new(), self.search_rows());
+        picker.looking = self.projects.is_none();
+        self.open_picker(picker);
+        self.find_projects();
+        let others = self.agents.others();
+        if !others.is_empty() {
+            // Numbered, so an older look that answers late doesn't replace a newer one
+            self.shells_asked += 1;
+            let asked = self.shells_asked;
+            self.spawn_job(move || {
+                let (details, resumable) = cmd::shells(&others);
+                Job::Shells(asked, details, resumable)
+            });
+        }
+    }
+
+    /// Every project, the ones found last time straight away, while every machine is asked again
+    fn open_projects(&mut self) {
+        let rows = picker::project_rows(self.projects.as_deref().unwrap_or_default(), Shows::Always);
+        let mut picker = Picker::new(Mode::Projects, "new agent in".into(), rows);
+        picker.looking = self.projects.is_none();
+        self.open_picker(picker);
+        self.find_projects();
+    }
+
+    /// Asks before ending the agent in the focused window
+    fn open_end(&mut self) {
+        let Some(addr) = self.agents.focused().map(String::from) else { return };
+        let agent = self.list.iter().find(|a| a.addr == addr);
+        let label = agent.map_or_else(|| addr.clone(), |a| a.label().to_string());
+        let machine = agent.map_or(hc::HOST.as_str(), |a| a.device());
+        self.open_picker(picker::end(&addr, &label, machine));
+    }
+
+    /// Runs `work` off the loop, which picks up what it found in jobs_done
+    fn spawn_job(&self, work: impl FnOnce() -> Job + Send + 'static) {
+        let sender = self.jobs.0.clone();
+        let Ok(mut wake) = self.wake.1.try_clone() else { return };
+        thread::spawn(move || {
+            let _ = sender.send(work());
+            let _ = wake.write_all(&[1]);
+        });
+    }
+
+    fn jobs_done(&mut self) {
+        let mut buf = [0u8; 64];
+        let _ = self.wake.0.read(&mut buf);
+        while let Ok(job) = self.jobs.1.try_recv() {
+            match job {
+                Job::Shells(asked, details, resumable) => {
+                    if asked < self.shells_answered {
+                        continue;
+                    }
+                    (self.shells, self.shells_answered) = ((details, resumable), asked);
+                    self.update_search();
+                }
+                Job::Projects(projects) => {
+                    (self.projects_found, self.projects_asking) = (Some(Instant::now()), false);
+                    if let Some(picker) = self.picker.as_mut().filter(|p| p.mode == Mode::Projects) {
+                        picker.looking = false;
+                        picker.set_rows(picker::project_rows(&projects, Shows::Always));
+                        self.sheet.dirty = true;
+                    }
+                    self.projects = Some(projects);
+                    self.update_search();
+                }
+                Job::Failed(msg) => self.open_picker(picker::note(&msg)),
+                Job::Done => {}
+            }
+        }
+    }
+
+    /// The search's rows again, after the agents or shells or projects changed under it
+    fn update_search(&mut self) {
+        if self.picker.as_ref().is_some_and(|p| p.mode == Mode::Search) {
+            let rows = self.search_rows();
+            if let Some(picker) = &mut self.picker {
+                picker.looking = self.projects.is_none();
+                picker.set_rows(rows);
+            }
+            self.sheet.dirty = true;
+        }
+    }
+
+    /// Does what the picker's chosen row is for
+    fn pick(&mut self) {
+        if let Some(action) = self.picker.as_ref().and_then(|p| p.selected_row()).map(|r| r.action.clone()) {
+            self.act(action);
+        }
+    }
+
+    /// Does what a row or tab is for
+    fn act(&mut self, action: Action) {
+        match action {
+            Action::Go { addr, label, resume } => {
+                self.close_picker();
+                thread::spawn(move || cmd::go(&addr, &label, resume.as_deref()));
+            }
+            Action::New => self.open_projects(),
+            Action::Start { machine, dir } => {
+                self.close_picker();
+                let taken = self.agents.names();
+                self.spawn_job(move || cmd::start(machine.as_deref(), &dir, &taken).map_or_else(Job::Failed, |_| Job::Done));
+            }
+            Action::End { addr, label } => {
+                self.close_picker();
+                self.spawn_job(move || cmd::end(&addr, &label).map_or_else(Job::Failed, |_| Job::Done));
+            }
+            Action::Close => self.close_picker(),
+        }
+    }
+
+    fn keyboard_event(&mut self, op: u16, args: &mut crate::wayland::Args) {
+        match op {
+            // keymap: its format, then (with the fd that came along) its size
+            0 => {
+                let (format, size) = (args.uint(), args.uint());
+                let Some(fd) = self.conn.take_fd() else { return };
+                let file = unsafe { File::from_raw_fd(fd) };
+                const XKB_V1: u32 = 1;
+                // From the start whatever the offset: the compositor may have left it at the end writing it
+                let mut text = vec![0; size as usize];
+                if format == XKB_V1 && file.read_exact_at(&mut text, 0).is_ok() {
+                    self.keys.set_keymap(&text);
+                }
+            }
+            // enter: the picker has the keyboard
+            1 => self.keyboard_entered = true,
+            // leave: the picker lost the keyboard, so it goes rather than stay open unable to hear Esc
+            2 => {
+                self.repeat = None;
+                self.close_picker();
+            }
+            // key
+            3 => {
+                let (_, _, key, state) = (args.uint(), args.uint(), args.uint(), args.uint());
+                if state == 1 {
+                    self.key(key);
+                    // Never the keys that pick or close: held, they'd act on whatever opens next
+                    let acts = matches!(key, keys::ENTER | keys::KP_ENTER | keys::ESC);
+                    if self.picker.is_some() && !acts && self.repeat_rate.0 > 0 && self.keys.repeats(key) {
+                        self.repeat = Some((key, Instant::now() + Duration::from_millis(self.repeat_rate.1.max(0) as u64)));
+                    }
+                } else if self.repeat.is_some_and(|(held, _)| held == key) {
+                    self.repeat = None;
+                }
+            }
+            // modifiers
+            4 => {
+                let (_, depressed, latched, locked, group) = (args.uint(), args.uint(), args.uint(), args.uint(), args.uint());
+                self.keys.modifiers(depressed, latched, locked, group);
+            }
+            // repeat_info
+            5 => self.repeat_rate = (args.uint() as i32, args.uint() as i32),
+            _ => {}
+        }
+    }
+
+    /// A key pressed in the picker
+    fn key(&mut self, key: u32) {
+        if self.picker.is_none() {
+            return;
+        }
+        let ctrl = self.keys.held(c"Control");
+        match key {
+            // SUPER as well as Esc, since SUPER opened it. Pressed in it, since the search has the keyboard; Hyprland's
+            // `lookout peek` closes it too, whichever comes first
+            keys::ESC | keys::SUPER_L | keys::SUPER_R => return self.close_picker(),
+            keys::ENTER | keys::KP_ENTER => return self.pick(),
+            _ => {}
+        }
+        // What a key types, unless it's a shortcut
+        let text = if ctrl || self.keys.held(c"Mod4") { String::new() } else { self.keys.text(key) };
+        let Some(picker) = &mut self.picker else { return };
+        // Ctrl with p k, n j, u and w, found by where they are on the keyboard
+        const P: u32 = 25;
+        const K: u32 = 37;
+        const N: u32 = 49;
+        const J: u32 = 36;
+        const U: u32 = 22;
+        const W: u32 = 17;
+        match key {
+            keys::UP => picker.move_by(-1),
+            keys::DOWN | keys::TAB => picker.move_by(1),
+            keys::PAGE_UP => picker.move_by(-(ui::SHEET_ROWS as i32)),
+            keys::PAGE_DOWN => picker.move_by(ui::SHEET_ROWS as i32),
+            keys::BACKSPACE => picker.backspace(ctrl),
+            P | K if ctrl => picker.move_by(-1),
+            N | J if ctrl => picker.move_by(1),
+            U if ctrl => picker.clear(),
+            W if ctrl => picker.backspace(true),
+            _ if !text.is_empty() => picker.type_text(&text),
+            _ => return,
+        }
+        self.sheet.dirty = true;
+    }
+
+    fn update_fullscreen(&mut self) {
+        let was = self.fullscreen;
+        self.fullscreen = hypr::fullscreen();
+        if was && !self.fullscreen {
             // It's been a while, so straight away rather than at the next tick
             self.refresh(Instant::now());
+        }
+        self.update_line();
+    }
+
+    fn update_line(&mut self) {
+        let show = self.fullscreen && !ui::line_colours(&self.list).is_empty();
+        if show != self.line.show || show {
+            (self.line.show, self.line.dirty) = (show, true);
         }
     }
 
     fn refresh(&mut self, now: Instant) {
-        self.last_refresh = now;
-        let text = self.board_text();
-        self.board.set_text(text);
+        self.refreshed = now;
+        let (items, clock) = (self.stats.items(), self.stats.clock());
+        if items != self.items || clock != self.clock {
+            (self.items, self.clock) = (items, clock);
+            self.bar.dirty = true;
+        }
+        self.sheet.dirty |= self.sheet.show;
     }
 
     fn agents_changed(&mut self) {
-        let text = self.board_text();
-        self.board.set_text(text);
-        let agents = self.agents.list();
-        let wanting: Vec<&Agent> = agents.iter().filter(|a| a.urgency().is_some()).collect();
-        // For `lookout next`
-        let list: String = wanting.iter().map(|a| format!("{}\t{}\n", a.addr, a.label())).collect();
-        let _ = fs::write(cmd::seen_file(), list);
-        let alert = match wanting.first() {
-            Some(first) if !self.peeking => vec![alert_line(first, wanting.len() - 1)],
-            _ => Vec::new(),
-        };
-        self.alert.set_text(alert);
+        let mut list = self.agents.list();
+        ui::order(&mut list);
+        let wanting: HashSet<String> = list.iter().filter(|a| a.urgency().is_some()).map(|a| a.addr.clone()).collect();
+        if self.started {
+            let until = Instant::now() + FLASH;
+            for addr in wanting.difference(&self.wanting) {
+                self.flash.insert(addr.clone(), until);
+            }
+        }
+        self.started = true;
+        // For `lookout next`, most wanting first
+        let next: String = list.iter().filter(|a| wanting.contains(&a.addr)).map(|a| format!("{}\t{}\n", a.addr, a.label())).collect();
+        let _ = fs::write(cmd::seen_file(), next);
+        (self.list, self.wanting) = (list, wanting);
+        self.bar.dirty = true;
+        self.sheet.dirty |= self.sheet.show;
+        self.update_line();
+        self.update_search();
     }
 
-    fn board_text(&mut self) -> Vec<Line> {
-        let mut text = stats_layout(&self.stats.items());
-        let agents = self.agents.list();
-        if SUMMARY && !self.peeking {
-            let summary = summary_line(&agents);
-            if !summary.is_empty() {
-                text.extend([spacer(), summary]);
+    fn draw(&mut self) {
+        for which in [Which::Bar, Which::Sheet, Which::Line] {
+            self.draw_one(which);
+        }
+    }
+
+    fn draw_one(&mut self, which: Which) {
+        let surf = self.surf(which);
+        if !surf.dirty {
+            return;
+        }
+        if !surf.show {
+            surf.dirty = false;
+            if surf.mapped {
+                // A null buffer unmaps it. Mapping again starts from a commit without one, then a configure
+                let surface = surf.surface;
+                (surf.mapped, surf.configured) = (false, false);
+                self.conn.send(surface, SURFACE_ATTACH, &[Arg::Obj(0), Arg::Int(0), Arg::Int(0)]);
+                self.conn.send(surface, SURFACE_COMMIT, &[]);
+                self.conn.send(surface, SURFACE_COMMIT, &[]);
             }
-            return text;
+            return;
         }
-        if !agents.is_empty() {
-            text.push(spacer());
+        // Still dirty if it isn't ready or there's no free buffer: the configure or release wakes the loop to retry
+        if !surf.configured {
+            return;
         }
-        let shown = if agents.len() > MAX_AGENTS { MAX_AGENTS - 1 } else { agents.len() };
-        // Columns as wide as the widest of what's shown, so machines and requests line up down the rows
-        let names = agents[..shown].iter().map(|a| cut(a.label(), NAME_COLS).len()).max().unwrap_or(0);
-        let devices = agents[..shown].iter().map(|a| a.device().len()).max().unwrap_or(0);
-        text.extend(agents[..shown].iter().map(|a| agent_line(a, names, devices)));
-        if shown < agents.len() {
-            text.push(vec![(Size::Text, " ".repeat(LABEL_COLS), LABEL), (Size::Small, format!("+{} more", agents.len() - shown), DEVICE)]);
+        let Some(mut pixels) = surf.pixels.take() else { return };
+        let Some(i) = pixels.buffers.iter().position(|(_, busy)| !busy) else {
+            self.surf(which).pixels = Some(pixels);
+            return;
+        };
+        let (w, h) = pixels.size;
+        let px = &mut pixels.map.pixels()[(i as i32 * w * h) as usize..][..(w * h) as usize];
+        let mut canvas = Canvas::new(px, w, h);
+        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let pointer = |hover: Option<(u32, i32, i32)>, surface: u32| hover.filter(|h| h.0 == surface).map(|(_, x, y)| (x, y));
+        let flash = |addr: &str| self.flash.contains_key(addr);
+        let view = View {
+            agents: &self.list,
+            focused: self.agents.focused(),
+            stats: &self.items,
+            clock: (&self.clock.0, &self.clock.1),
+            workspace: &self.workspace,
+            now_ms,
+            flash: &flash,
+            pointer: None,
+        };
+        let surface = match which {
+            Which::Bar => self.bar.surface,
+            Which::Sheet => self.sheet.surface,
+            Which::Line => self.line.surface,
+        };
+        let mut damage_h = h;
+        match which {
+            Which::Bar => self.bar_hits = ui::bar(&mut canvas, &View { pointer: pointer(self.hover, surface), ..view }),
+            Which::Sheet => {
+                // Peeked at, the sheet lists the agents; searching, it lists what the search has
+                let peek;
+                let list = match &self.picker {
+                    Some(picker) => picker,
+                    None => {
+                        peek = Picker::new(Mode::Peek, String::new(), self.agent_rows());
+                        &peek
+                    }
+                };
+                let (hits, height) = ui::sheet(&mut canvas, &View { pointer: pointer(self.hover, surface), ..view }, list);
+                self.sheet_hits = hits;
+                // Clicks only land on the sheet's panel, not the clear space below it
+                // Only the panel, or the panel it was if that was taller, rather than the whole surface
+                damage_h = height.max(self.sheet_height).max(1);
+                if height != self.sheet_height {
+                    self.sheet_height = height;
+                    let region = self.region(SHEET_W, height);
+                    self.conn.send(surface, SURFACE_SET_INPUT_REGION, &[Arg::Obj(region)]);
+                    self.conn.send(region, REGION_DESTROY, &[]);
+                }
+            }
+            Which::Line => ui::line(&mut canvas, &ui::line_colours(&self.list)),
         }
-        text
+        let id = pixels.buffers[i].0;
+        pixels.buffers[i].1 = true;
+        self.conn.send(surface, SURFACE_DAMAGE, &[Arg::Int(0), Arg::Int(0), Arg::Int(w), Arg::Int(damage_h)]);
+        self.conn.send(surface, SURFACE_ATTACH, &[Arg::Obj(id), Arg::Int(0), Arg::Int(0)]);
+        self.conn.send(surface, SURFACE_COMMIT, &[]);
+        let surf = self.surf(which);
+        (surf.pixels, surf.mapped, surf.dirty) = (Some(pixels), true, false);
     }
 }
 
@@ -651,223 +1155,4 @@ fn bind(conn: &mut Conn, registry: u32, globals: &[(u32, String, u32)], interfac
     let id = conn.new_id();
     conn.send(registry, 0, &[Arg::Uint(*name), Arg::Str(interface), Arg::Uint((*version).min(max_version)), Arg::Uint(id)]);
     Ok(id)
-}
-
-/// The clock big on its own line, then a line per stat with its label, and any note small after a space
-fn stats_layout(items: &[Item]) -> Vec<Line> {
-    items
-        .iter()
-        .map(|(label, value, note)| {
-            if label.is_empty() {
-                return vec![(Size::Clock, value.clone(), VALUE)];
-            }
-            let mut line = vec![(Size::Text, format!("{label:LABEL_COLS$}"), LABEL), (Size::Text, value.clone(), VALUE)];
-            if let Some(note) = note {
-                // "3.6/15" reads as used of total, "38 chg" as a remark
-                if !note.starts_with('/') {
-                    line.push((Size::Text, " ".into(), VALUE));
-                }
-                line.push((Size::Small, note.clone(), LABEL));
-            }
-            line
-        })
-        .collect()
-}
-
-/// How an agent shows: its state as a label in the stats' style and the label's colour, and its name's colour. The
-/// brighter, the more it wants you
-struct Look {
-    mark: char,
-    label: &'static str,
-    label_colour: u32,
-    name_colour: u32,
-}
-
-fn look(agent: &Agent) -> Look {
-    let (mark, label, label_colour, name_colour) = match agent.state.as_str() {
-        "blocked" => (SOLID, "ASK", ASK, VALUE),
-        "error" => (SOLID, "ERR", ERROR, VALUE),
-        "done" if !agent.seen => (SOLID, "DONE", VALUE, VALUE),
-        "done" => (OUTLINE, "DONE", DEVICE, DEVICE),
-        "working" => (CHECKER, "WORK", LABEL, LABEL),
-        // Busy too, on its background tasks, which wake it when they end
-        "waiting" => (CHECKER, "WAIT", LABEL, LABEL),
-        "idle" => (SPARSE, "IDLE", DEVICE, DEVICE),
-        _ => (SPARSE, "?", DEVICE, DEVICE),
-    };
-    Look { mark, label, label_colour, name_colour }
-}
-
-/// An empty line between the stats and the agents
-fn spacer() -> Line {
-    vec![(Size::Small, String::new(), LABEL)]
-}
-
-/// "ASK  api     laptop", laid out like "MEM  3.6/15", with the name and machine padded to `names` and `devices` so
-/// the columns line up. What an agent asks goes in the alert, where there's room to read it
-fn agent_line(agent: &Agent, names: usize, devices: usize) -> Line {
-    let look = look(agent);
-    let mut line = marker(&look);
-    line.extend([
-        (Size::Text, format!("{:LABEL_COLS$}", look.label), look.label_colour),
-        (Size::Text, format!("{:names$}  ", cut(agent.label(), NAME_COLS)), look.name_colour),
-        (Size::Small, format!("{:devices$}", agent.device()), DEVICE),
-    ]);
-    line
-}
-
-/// "■ 2   ■ 1   ▩ 3": how many agents look each way, most wanting first, each count in its state's colour. Only
-/// agents that want you or are working: idle ones, and finished ones you've seen, ask nothing of a glance
-fn summary_line(agents: &[Agent]) -> Line {
-    let mut groups: Vec<(char, u32, usize)> = Vec::new();
-    for look in agents.iter().map(look).filter(|l| l.mark != SPARSE && l.mark != OUTLINE) {
-        match groups.iter_mut().find(|(mark, colour, _)| *mark == look.mark && *colour == look.label_colour) {
-            Some(group) => group.2 += 1,
-            None => groups.push((look.mark, look.label_colour, 1)),
-        }
-    }
-    let mut line = Line::new();
-    for (i, (mark, colour, count)) in groups.into_iter().enumerate() {
-        if i > 0 {
-            line.push((Size::Text, "   ".into(), LABEL));
-        }
-        line.push((Size::Mark, mark.to_string(), colour));
-        line.push((Size::Text, count.to_string(), colour));
-    }
-    line
-}
-
-/// What an agent that wants you says about it
-fn note(agent: &Agent) -> Option<&str> {
-    (agent.urgency().is_some() || agent.state == "blocked").then(|| agent.msg.as_deref().or(agent.kind.as_deref())).flatten()
-}
-
-/// "ASK  api  laptop  npm publish  +2", the first of what wants you, where, what it says, and how many others do
-fn alert_line(agent: &Agent, others: usize) -> Line {
-    let look = look(agent);
-    let mut line = marker(&look);
-    line.extend([
-        (Size::Text, format!("{:LABEL_COLS$}", look.label), look.label_colour),
-        (Size::Text, cut(agent.label(), NAME_COLS), look.name_colour),
-        // Two text widths apart, like the label from the name
-        (Size::Text, "  ".into(), LABEL),
-        (Size::Small, agent.device(), DEVICE),
-    ]);
-    if let Some(note) = note(agent) {
-        line.push((Size::Text, "  ".into(), LABEL));
-        line.push((Size::Small, cut(note, NOTE_COLS), LABEL));
-    }
-    // How many others want you, not "more" like the board's hidden rows
-    if others > 0 {
-        line.push((Size::Text, "  ".into(), LABEL));
-        line.push((Size::Small, format!("+{others}"), DEVICE));
-    }
-    line
-}
-
-/// The biggest an agent's line gets, to size the surfaces once: as wide as allowed, with the characters that reach
-/// highest and lowest, so whatever's shown fits with its panel even around it
-fn widest_agent() -> Agent {
-    let tall = |n: usize| "Wd|(gj)".chars().cycle().take(n).collect::<String>();
-    Agent {
-        addr: format!("{}/t1", tall(8)),
-        name: Some(tall(NAME_COLS)),
-        state: "blocked".into(),
-        kind: None,
-        msg: Some(tall(NOTE_COLS)),
-        since: 0,
-        seen: false,
-    }
-}
-
-/// `s` as printable ASCII, cut to `cols` characters with ".." when longer
-fn cut(s: &str, cols: usize) -> String {
-    let ascii: String = s.chars().map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' }).collect();
-    if ascii.chars().count() > cols {
-        let cut: String = ascii.chars().take(cols - 2).collect();
-        // End at the last whole word rather than a scrap of one, unless it's all one word. The next character tells
-        // whether the cut fell between words
-        let between = ascii.chars().nth(cols - 2) == Some(' ');
-        let cut = match cut.rsplit_once(' ') {
-            Some((before, _)) if !between && !before.trim().is_empty() => before.to_string(),
-            _ => cut,
-        };
-        format!("{}..", cut.trim_end())
-    } else {
-        ascii
-    }
-}
-
-/// Height of a line and how far down its baseline sits, so smaller runs sit on the same baseline
-fn line_metrics(line: &Line) -> (i32, i32) {
-    if *line == spacer() {
-        return (SECTION_GAP, 0);
-    }
-    let baseline = line.iter().map(|(size, ..)| size.font().baseline).max().unwrap_or(0);
-    let height = line.iter().map(|(size, ..)| baseline - size.font().baseline + size.font().height).max().unwrap_or(0);
-    (height, baseline)
-}
-
-/// Width and height in pixels
-fn text_size(lines: &[Line]) -> (i32, i32) {
-    let width = |line: &Line| line.iter().map(|(size, s, _)| s.chars().count() as i32 * size.font().advance).sum::<i32>();
-    let w = lines.iter().map(width).max().unwrap_or(0);
-    let h = lines.iter().map(|line| line_metrics(line).0 + LINE_GAP).sum::<i32>() - LINE_GAP;
-    (w, h.max(0))
-}
-
-
-/// How far to move a line so its first ink lines up with the labels' rather than its cell. Only the clock's big
-/// digits have enough space before them to matter
-fn nudge(line: &Line) -> i32 {
-    match line.first() {
-        Some((Size::Clock, ..)) => {
-            let left = |size: Size, c| size.font().ink(c).map_or(0, |ink| ink[0]);
-            left(Size::Text, 'B') - left(Size::Clock, '0')
-        }
-        _ => 0,
-    }
-}
-
-/// Where a line's first cell goes, given the text's left edge: markers hang left of it, and the clock moves so
-/// its digits line up with the labels
-fn line_start(line: &Line, x0: i32, hang: i32) -> i32 {
-    x0 + nudge(line) - if hang > 0 && hangs(line) { MARK_ADVANCE } else { 0 }
-}
-
-/// Left, top, right and bottom (exclusive) of the ink `lines` lay down from (x, y), walking them as they're drawn
-fn ink_box(lines: &[Line], x: i32, y: i32, hang: i32) -> (i32, i32, i32, i32) {
-    let mut ink = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-    let mut top = y;
-    for line in lines {
-        let (height, baseline) = line_metrics(line);
-        let mut left = line_start(line, x, hang);
-        for (size, s, _) in line {
-            let font = size.font();
-            let cell_top = top + baseline - font.baseline;
-            for c in s.chars() {
-                if let Some([l, t, r, b]) = font.ink(c) {
-                    ink = (ink.0.min(left + l), ink.1.min(cell_top + t), ink.2.max(left + r), ink.3.max(cell_top + b));
-                }
-                left += font.advance;
-            }
-        }
-        top += height + LINE_GAP;
-    }
-    if ink.0 > ink.2 { (x, y, x, y) } else { ink }
-}
-
-/// Whether a line starts with a marker
-fn hangs(line: &Line) -> bool {
-    line.first().is_some_and(|(size, ..)| *size == Size::Mark)
-}
-
-/// The marker run that starts an agent's line, if markers are on
-fn marker(look: &Look) -> Line {
-    if MARKERS { vec![(Size::Mark, look.mark.to_string(), look.label_colour)] } else { Vec::new() }
-}
-
-/// The margin markers hang into
-fn hang() -> i32 {
-    if MARKERS { MARK_ADVANCE } else { 0 }
 }

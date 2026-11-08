@@ -1,10 +1,10 @@
-//! What the Hyprland binds run: pick an agent, start one, jump to the one that wants you, end one, and the loop each
-//! agent's foot window runs. An agent's window has the class "hc:<address>", which is how it's found again
+//! What the Hyprland binds run: ask the bar's daemon to pick an agent, start one or end one, jump to the one that
+//! wants you, and the loop each agent's foot window runs. Then the slow work the daemon's picker does off its loop.
+//! An agent's window has the class "hc:<address>", which is how it's found again
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::thread::sleep;
@@ -14,7 +14,6 @@ use crate::desktop;
 use crate::hc::{self, Term};
 use crate::hypr;
 use crate::sys;
-use crate::waiting;
 
 use serde_json::Value;
 
@@ -34,123 +33,92 @@ const SESSIONS: &str = r#"while [ $# -ge 2 ]; do
   shift 2
 done"#;
 
-/// Tells the daemon to peek (SIGUSR1) or stop (SIGUSR2)
+/// What a terminal that's only a shell at its prompt has in front
+const SHELLS: [&str; 5] = ["bash", "zsh", "fish", "sh", "nu"];
+
+/// Tells the daemon to peek (SIGUSR1) or stop (SIGUSR2), with when SUPER went down or up. Each comes from its own
+/// process started by a bind, so a quick tap's two can arrive the wrong way round, and the time sorts them out
 pub fn signal(signal: i32) {
-    let pid = fs::read_to_string(desktop::pid_file()).ok().and_then(|p| p.trim().parse::<i32>().ok());
-    // Only if it's still lookout, a stale pid could be anything by now
-    let Some(pid) = pid.filter(|pid| fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim() == "lookout")) else {
-        return;
-    };
-    let _ = sys::send_signal(pid, signal);
+    if let Some(pid) = daemon() {
+        let _ = sys::send_signal(pid, signal, sys::monotonic_ms());
+    }
 }
 
-/// Every terminal in fuzzel: agents that want you first, so Enter goes straight to the one that wants you most, then
-/// working ones, the rest, ones whose Claude can be resumed, and plain shells. Picking one focuses its window or opens
-/// one, resuming its Claude first if it needs it
-pub fn pick() {
-    let mut terms = hc::list();
-    // The daemon's order when it's running, since it knows which you've already looked at. Without it, hc's
-    let wanting: Option<Vec<String>> = seen_state().map(|agents| agents.into_iter().map(|(addr, _)| addr).collect());
-    // Both take a round trip to the other machines, so they go at the same time
-    let labels = waiting_labels(&terms);
-    let resumable = sessions(&terms);
-    let waiting = waiting_from(labels);
-    let rank = |t: &Term| {
-        let wants = match &wanting {
-            Some(wanting) => wanting.iter().position(|a| *a == t.addr),
-            None if waiting.contains(&t.addr) => None,
-            None => t.status.as_deref().and_then(hc::urgency).map(usize::from),
-        };
-        wants.map_or_else(|| rest(t, &resumable), |i| (0, i))
-    };
-    terms.sort_by_cached_key(|t| (rank(t), t.label().to_string()));
+/// What `lookout pick`, `new` and `kill` ask the daemon to open its picker for, sent with sys::SIGCMD
+pub const PICK: u64 = 1;
+pub const NEW: u64 = 2;
+pub const END: u64 = 3;
 
-    let names = terms.iter().map(|t| t.label().len()).max().unwrap_or(0);
-    let machines = terms.iter().map(|t| t.machine().unwrap_or(&hc::HOST).len()).max().unwrap_or(0);
-    let mut entries: Vec<String> = terms
+/// Asks the daemon to open its picker, which is already running, so it opens at once
+pub fn ask(what: u64) {
+    match daemon() {
+        Some(pid) => {
+            let _ = sys::send_signal(pid, sys::SIGCMD, what);
+        }
+        None => {
+            eprintln!("lookout: the bar isn't running, start it with `lookout`");
+            exit(1);
+        }
+    }
+}
+
+/// What `hc ls` leaves out about a terminal
+pub struct Detail {
+    /// What's running in it now. `hc ls` names the program it started with, so a Claude typed into a shell looks
+    /// like the shell there
+    pub foreground: Option<String>,
+}
+
+/// For terminals that report no status: what's in front of each, and the Claude session each shell at its prompt
+/// could resume, by address. Both take a round trip to the other machines, so they go at once, and it's run off the
+/// daemon's loop
+pub fn shells(terms: &[Term]) -> (HashMap<String, Detail>, HashMap<String, String>) {
+    let asked: Vec<(String, Child)> = terms
         .iter()
-        .map(|t| {
-            let wants = rank(t).0 == 0;
-            let (mark, status) = match t.status.as_deref() {
-                Some("blocked") => ('!', "blocked"),
-                Some("error") => ('x', "error"),
-                Some("done") if waiting.contains(&t.addr) => ('-', "wait"),
-                Some("done") if wants => ('*', "done"),
-                Some("working") => ('~', "working"),
-                Some(status) => ('-', status),
-                None if resumable.contains_key(&t.addr) => ('>', "resume"),
-                None => (' ', ""),
-            };
-            let machine = t.machine().unwrap_or(&hc::HOST);
-            format!("{mark} {:names$}  {status:7}  {machine:machines$}  {}", t.label(), hc::tilde(&t.cwd))
+        .filter_map(|t| {
+            let mut get = hc::command(&["get", &t.addr, "--json"]);
+            get.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+            get.spawn().ok().map(|child| (t.addr.clone(), child))
         })
         .collect();
-    entries.push("+ new agent".to_string());
-    match choose("agent", &entries) {
-        Some(i) if i == terms.len() => new(),
-        Some(i) => {
-            let term = &terms[i];
-            if let Some(id) = resumable.get(&term.addr) {
-                resume(term, id);
-            }
-            focus_or_open(&term.addr, term.label());
-        }
-        None => {}
+    let running = find_sessions(terms);
+    let mut details = HashMap::new();
+    for (addr, child) in asked {
+        let Some(term) = child.wait_with_output().ok().and_then(|out| serde_json::from_slice::<Value>(&out.stdout).ok()) else { continue };
+        details.insert(addr, Detail { foreground: hc::str(&term["foreground"]["name"]) });
     }
+    let resumable = sessions(running, &details);
+    (details, resumable)
 }
 
-/// Where a terminal that doesn't want you goes in the pick list
-fn rest(t: &Term, resumable: &HashMap<String, String>) -> (u8, usize) {
-    match t.status.as_deref() {
-        Some("working") => (1, 0),
-        Some(_) => (2, 0),
-        None if resumable.contains_key(&t.addr) => (3, 0),
-        None => (4, 0),
+/// Starts looking for the Claude session each named terminal could resume, every machine at once. Which of them are
+/// really at a shell prompt is only known once their details are in, see sessions
+fn find_sessions(terms: &[Term]) -> Vec<(Vec<&Term>, Child)> {
+    let mut by_machine: HashMap<Option<&str>, Vec<&Term>> = HashMap::new();
+    for term in terms.iter().filter(|t| t.name.is_some()) {
+        by_machine.entry(term.machine()).or_default().push(term);
     }
-}
-
-/// Asks hc for the labels of every finished agent, since `hc ls` leaves them out. Started here, read by waiting_from
-fn waiting_labels(terms: &[Term]) -> Vec<(String, Child)> {
-    let done = terms.iter().filter(|t| t.status.as_deref() == Some("done"));
-    done.filter_map(|t| {
-        let mut get = hc::command(&["get", &t.addr, "--json"]);
-        get.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-        get.spawn().ok().map(|child| (t.addr.clone(), child))
-    })
-    .collect()
-}
-
-/// The finished agents still waiting on background tasks, which a Stop hook marks with a label
-fn waiting_from(labels: Vec<(String, Child)>) -> HashSet<String> {
-    labels
+    by_machine
         .into_iter()
-        .filter_map(|(addr, child)| {
-            let term: Value = serde_json::from_slice(&child.wait_with_output().ok()?.stdout).ok()?;
-            hc::str(&term["labels"][waiting::LABEL]).map(|_| addr)
+        .filter_map(|(machine, terms)| {
+            let args: Vec<&str> = terms.iter().flat_map(|t| [t.label(), t.cwd.as_str()]).collect();
+            let child = hc::sh(machine, SESSIONS, &args).spawn().ok()?;
+            Some((terms, child))
         })
         .collect()
 }
 
 /// The Claude sessions that shells at their prompt can resume, by address: an agent that exited, or a kept terminal
 /// that came back as a shell after a reboot. Found by the terminal's name, which `lookout new` gave its Claude
-fn sessions(terms: &[Term]) -> HashMap<String, String> {
-    let mut by_machine: HashMap<Option<&str>, Vec<&Term>> = HashMap::new();
-    for term in terms.iter().filter(|t| t.at_prompt() && t.name.is_some()) {
-        by_machine.entry(term.machine()).or_default().push(term);
-    }
-    // Every machine at once, since a remote one takes a round trip
-    let running: Vec<_> = by_machine
-        .iter()
-        .filter_map(|(machine, terms)| {
-            let args: Vec<&str> = terms.iter().flat_map(|t| [t.label(), t.cwd.as_str()]).collect();
-            hc::sh(*machine, SESSIONS, &args).spawn().ok().map(|child| (terms, child))
-        })
-        .collect();
+fn sessions(running: Vec<(Vec<&Term>, Child)>, details: &HashMap<String, Detail>) -> HashMap<String, String> {
+    // Only a shell that's in front, never one with Claude or anything else running in it, since resuming types
+    // into it
+    let at_prompt = |t: &Term| details.get(&t.addr).and_then(|d| d.foreground.as_deref()).is_some_and(|f| SHELLS.contains(&f));
     let mut found = HashMap::new();
     for (terms, child) in running {
         let Ok(out) = child.wait_with_output() else { continue };
         for (name, id) in String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.split_once(' ')) {
-            if let Some(term) = terms.iter().find(|t| t.label() == name) {
+            if let Some(term) = terms.iter().find(|t| t.label() == name && at_prompt(t)) {
                 found.insert(term.addr.clone(), id.to_string());
             }
         }
@@ -158,17 +126,26 @@ fn sessions(terms: &[Term]) -> HashMap<String, String> {
     found
 }
 
-/// Types `claude --resume` into a terminal's shell, picking up its conversation where it left off
-fn resume(term: &Term, id: &str) {
-    let _ = hc::command(&["send", &term.addr, &format!("claude --resume {id}")]).stdout(Stdio::null()).status();
+/// Goes to a terminal's window, opening one if it has none, and typing `claude --resume` into its shell first when
+/// there's a session to pick up
+pub fn go(addr: &str, label: &str, resume: Option<&str>) {
+    // Asked again now rather than trusting the picker's look, which may be from before something else started in it
+    let at_prompt = || {
+        let term = hc::json(&["get", addr]).ok()?;
+        hc::str(&term["foreground"]["name"]).filter(|f| SHELLS.contains(&f.as_str()))
+    };
+    if let Some(id) = resume.filter(|_| at_prompt().is_some()) {
+        let _ = hc::command(&["send", addr, &format!("claude --resume {id}")]).stdout(Stdio::null()).status();
+    }
+    focus_or_open(addr, label);
 }
 
-/// Picks a project on any machine, starts a shell there with Claude in it, and opens its window
-pub fn new() {
-    // Every machine at once, the other machines first since they're where agents mostly live
+/// Every project on every machine: $HOME and the git repos under it, the other machines first since they're where
+/// agents mostly live
+pub fn projects() -> Vec<(Option<String>, String)> {
     let machines: Vec<Option<String>> = hc::machines().into_iter().map(Some).chain([None]).collect();
     let running: Vec<_> = machines.iter().map(|m| hc::sh(m.as_deref(), PROJECTS, &[]).spawn()).collect();
-    let mut places: Vec<(Option<String>, String)> = Vec::new();
+    let mut places = Vec::new();
     for (machine, child) in machines.iter().zip(running) {
         let Ok(found) = child.and_then(|c| c.wait_with_output()) else { continue };
         let found = String::from_utf8_lossy(&found.stdout);
@@ -180,31 +157,33 @@ pub fn new() {
         dirs.insert(0, home.to_string());
         places.extend(dirs.into_iter().map(|dir| (machine.clone(), dir)));
     }
-    let width = places.iter().map(|(m, _)| m.as_deref().unwrap_or(&hc::HOST).len()).max().unwrap_or(0);
-    let entries: Vec<String> =
-        places.iter().map(|(m, dir)| format!("{:width$}  {}", m.as_deref().unwrap_or(&hc::HOST), hc::tilde(dir))).collect();
-    let Some(i) = choose("new agent in", &entries) else { return };
-    let (machine, dir) = &places[i];
+    places
+}
 
-    // Named after its folder, made unique among what's running
+/// Starts a shell with Claude in it in `dir` on `machine`, named after the folder and unlike any of `taken`, and
+/// opens its window
+pub fn start(machine: Option<&str>, dir: &str, taken: &[String]) -> Result<(), String> {
     let base = term_name(&Path::new(dir).file_name().map_or(String::new(), |n| n.to_string_lossy().to_string()));
-    let taken: Vec<String> = hc::list().iter().filter_map(|t| t.name.clone()).collect();
     let name = (1..).map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") }).find(|n| !taken.contains(n)).unwrap();
-
     // A shell rather than Claude directly: it loads the login's PATH, and it's still there if Claude exits. Kept, so
-    // that after a reboot it comes back as a shell that `lookout pick` can resume Claude in
+    // that after a reboot it comes back as a shell the picker can resume Claude in
     let mut args = vec!["run", "--bg", "--keep", "--no-parent", "--cwd", dir, "--name", &name];
     if let Some(m) = machine {
         args.extend(["--on", m]);
     }
-    let run = match hc::json(&args) {
-        Ok(run) => run,
-        Err(err) => return tell(&format!("can't start {name}: {err}")),
-    };
-    let Some(addr) = hc::str(&run["address"]) else { return };
+    let run = hc::json(&args).map_err(|err| format!("can't start {name}: {err}"))?;
+    let addr = hc::str(&run["address"]).ok_or_else(|| format!("can't start {name}: hc didn't say where"))?;
     // Named, so the window's title and /resume show it, and the session can be found again by it
     let _ = hc::command(&["send", &addr, &format!("claude -n {name}")]).stdout(Stdio::null()).status();
     open(&addr, &name);
+    Ok(())
+}
+
+/// Ends an agent for good, even a kept one
+pub fn end(addr: &str, label: &str) -> Result<(), String> {
+    hc::call(&["kill", addr]).map_err(|err| format!("can't end {label}: {err}"))?;
+    let _ = hc::command(&["rm", addr]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    Ok(())
 }
 
 /// A name hc takes for a terminal, from a folder's: 1-32 of a-z 0-9 - _ . starting with a letter or digit, and not
@@ -240,19 +219,6 @@ pub fn next() {
     }
 }
 
-/// Ends the agent in the focused window, after asking
-pub fn kill() {
-    let Some(class) = hypr::focused_class() else { return };
-    let Some(addr) = class.strip_prefix("hc:") else { return };
-    let label = hc::list().into_iter().find(|t| t.addr == addr).map_or(addr.to_string(), |t| t.label().to_string());
-    if choose(&format!("end {label}?"), &["no".into(), format!("yes, end {label}")]) == Some(1) {
-        // An explicit kill is final even for a kept terminal
-        if let Err(err) = hc::call(&["kill", addr]) {
-            return tell(&format!("can't end {label}: {err}"));
-        }
-        let _ = hc::command(&["rm", addr]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-    }
-}
 /// What an agent's window runs: attach, and attach again if hc lost it, until you detach or it ends
 pub fn view(addr: &str) -> ! {
     loop {
@@ -273,7 +239,7 @@ pub fn view(addr: &str) -> ! {
     }
 }
 
-fn focus_or_open(addr: &str, label: &str) {
+pub fn focus_or_open(addr: &str, label: &str) {
     let class = format!("hc:{addr}");
     match hypr::windows().into_iter().find(|(_, c)| *c == class) {
         Some((address, _)) => hypr::focus(&address),
@@ -286,36 +252,30 @@ fn open(addr: &str, label: &str) {
     let runtime = env::var("XDG_RUNTIME_DIR").unwrap_or_default();
     let display = env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into());
     let server = PathBuf::from(runtime).join(format!("foot-{display}.sock")).exists();
-    let exe = env::current_exe().map_or("lookout".into(), |p| p.to_string_lossy().to_string());
     let result = Command::new(if server { "footclient" } else { "foot" })
-        .args(["--app-id", &format!("hc:{addr}"), "--title", label, &exe, "view", addr])
+        .args(["--app-id", &format!("hc:{addr}"), "--title", label])
+        .arg(exe())
+        .args(["view", addr])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
-    if let Err(err) = result {
-        eprintln!("lookout: can't open foot: {err}");
+    match result {
+        // Waited on out of the way, since the bar opens windows too and lives on: one never waited on stays a
+        // zombie under it
+        Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+        Err(err) => eprintln!("lookout: can't open foot: {err}"),
     }
 }
 
-/// Says what went wrong in fuzzel, since a bind's output goes nowhere
-fn tell(msg: &str) {
-    choose(&format!("lookout: {msg}"), &["ok".into()]);
-}
-
-/// Shows `entries` in fuzzel and returns the index picked, None if you escaped
-fn choose(prompt: &str, entries: &[String]) -> Option<usize> {
-    let lines = entries.len().clamp(1, 15).to_string();
-    let mut fuzzel = Command::new("fuzzel")
-        .args(["--dmenu", "--index", "--width", "80", "--lines", &lines, "--prompt", &format!("{prompt} > ")])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|err| eprintln!("lookout: can't run fuzzel: {err}"))
-        .ok()?;
-    fuzzel.stdin.take()?.write_all(entries.join("\n").as_bytes()).ok()?;
-    let out = fuzzel.wait_with_output().ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse::<i64>().ok().and_then(|i| usize::try_from(i).ok()).filter(|&i| i < entries.len())
+/// This program, to run again in a window. Rebuilt or reinstalled while running, Linux names it "<path> (deleted)",
+/// which no window could start, so it's the new one at the same path, or failing that whichever is on PATH
+fn exe() -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    let path = env::current_exe().unwrap_or_default();
+    let bytes = path.as_os_str().as_bytes();
+    let path = Path::new(std::ffi::OsStr::from_bytes(bytes.strip_suffix(b" (deleted)").unwrap_or(bytes)));
+    if path.is_file() { path.to_path_buf() } else { "lookout".into() }
 }
 
 /// Where the daemon writes the agents that want you and you haven't looked at, most first: address and label
@@ -323,10 +283,19 @@ pub fn seen_file() -> PathBuf {
     PathBuf::from(env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into())).join("lookout.wanting")
 }
 
+/// The daemon's pid while it's running. Only then can what it writes be trusted, and a stale pid could be anything,
+/// even an agent window's `lookout view`, so it's only the daemon if it's lookout started with nothing after it
+pub fn daemon() -> Option<i32> {
+    let pid: i32 = fs::read_to_string(desktop::pid_file()).ok()?.trim().parse().ok()?;
+    let cmdline = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let mut args = cmdline.split(|&b| b == 0).filter(|a| !a.is_empty());
+    let named = args.next().is_some_and(|exe| exe.rsplit(|&b| b == b'/').next() == Some(b"lookout"));
+    (named && args.next().is_none()).then_some(pid)
+}
+
 fn seen_state() -> Option<Vec<(String, String)>> {
     // Only trust it while the daemon that writes it is running
-    let pid = fs::read_to_string(desktop::pid_file()).ok()?;
-    fs::read_to_string(format!("/proc/{}/comm", pid.trim())).ok().filter(|c| c.trim() == "lookout")?;
+    daemon()?;
     let text = fs::read_to_string(seen_file()).ok()?;
     Some(text.lines().filter_map(|l| l.split_once('\t')).map(|(a, l)| (a.to_string(), l.to_string())).collect())
 }
