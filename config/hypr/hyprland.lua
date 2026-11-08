@@ -12,12 +12,7 @@ hl.env("HYPRCURSOR_SIZE", "24")
 
 hl.config({
     input = {
-        kb_layout  = "us",
-        kb_variant = "",
-        kb_model   = "",
-        kb_options = "",
-        kb_rules   = "",
-
+        kb_layout    = "us",
         follow_mouse = 1,
     },
 
@@ -40,10 +35,6 @@ hl.config({
         shadow = {
             enabled = false,
         },
-    },
-
-    animations = {
-        enabled = true,
     },
 
     dwindle = {
@@ -76,7 +67,7 @@ hl.bind(mainMod .. " + F",         hl.dsp.window.fullscreen({ action = "toggle" 
 hl.bind(mainMod .. " + E",         hl.dsp.layout("togglesplit"))
 
 hl.bind(mainMod .. " + W", hl.dsp.exec_cmd("brave"))
-hl.bind(mainMod .. " + C", hl.dsp.exec_cmd("code --enable-features=UseOzonePlatform,WaylandWindowDecorations --ozone-platform-hint=auto"))
+hl.bind(mainMod .. " + C", hl.dsp.exec_cmd("code"))
 hl.bind(mainMod .. " + S", hl.dsp.exec_cmd("spotify-launcher"))
 hl.bind(mainMod .. " + D", hl.dsp.exec_cmd("footclient"))
 hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("prismlauncher"))

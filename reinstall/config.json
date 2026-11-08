@@ -9,7 +9,6 @@
         "config_type": "pre_mounted_config",
         "mountpoint": "/mnt"
     },
-    "hostname": "desktop",
     "kernels": [
         "linux"
     ],
