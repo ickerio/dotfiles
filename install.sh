@@ -141,6 +141,12 @@ create_symlinks() {
     link "$(pwd)/machines/$MACHINE/bashrc.sh" ~/.bashrc.local
 }
 
+# Apps and websites that follow the system's light or dark choice pick dark. Brave follows it once its theme is
+# loaded, rather than its own setting
+prefer_dark() {
+    gsettings set org.gnome.desktop.interface color-scheme prefer-dark
+}
+
 install_hc() {
     # herdr-core keeps agents' terminals alive and reports their status, lookout shows them. It updates
     # itself with `hc update`, so only install it once
@@ -195,6 +201,7 @@ if [ "$MACHINE" = xps ]; then
     configure_xps
 fi
 create_symlinks
+prefer_dark
 install_hc
 if [ "$MACHINE" = pc ]; then
     start_hc_at_boot
