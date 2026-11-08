@@ -1,2 +1,4 @@
 config/hypr/machine.lua
 lookout/target
+# Brave writes this into the theme it loads
+brave/theme/Cached Theme.pak
