@@ -90,7 +90,7 @@ create_udev_rules() {
 
 enable_tailscale() {
     # Login lives in /var/lib/tailscale, which a reinstall wipes, so `sudo tailscale up` again after
-    # (`--ssh` on the PC, which serves Remote-SSH and hc instead of sshd)
+    # (`--ssh` on the PC, which serves hc instead of sshd)
     sudo systemctl enable --now tailscaled.service
 }
 

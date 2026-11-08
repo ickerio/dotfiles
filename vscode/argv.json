@@ -1,5 +1,3 @@
 {
-    "enable-crash-reporter": false,
-    // open-remote-ssh (laptop only) needs proposed APIs that only VSCodium enables by default
-    "enable-proposed-api": ["jeanp413.open-remote-ssh"]
+    "enable-crash-reporter": false
 }
