@@ -84,7 +84,6 @@ install_vscode_extensions() {
 
 create_udev_rules() {
     sudo cp udev/*.rules /etc/udev/rules.d/
-    sudo rm -f /etc/udev/rules.d/99-finalmouse.rules
     sudo udevadm control --reload-rules && sudo udevadm trigger
 }
 
@@ -132,8 +131,6 @@ create_symlinks() {
         link "$(pwd)/$dir" ~/.config/"$(basename "$dir")"
     done
     ln -sfn "../../machines/$MACHINE/hypr.lua" config/hypr/machine.lua
-    # Wallpaper moved into config/hypr
-    [ -L ~/wallpaper.png ] && rm ~/wallpaper.png
 
     link "$(pwd)/vscode/settings.json" ~/.config/"Code - OSS"/User/settings.json
     # Arch's default .bashrc from /etc/skel is fine to replace
