@@ -147,6 +147,11 @@ prefer_dark() {
     gsettings set org.gnome.desktop.interface color-scheme prefer-dark
 }
 
+# Windows close from the keyboard, so apps that draw their own title bar buttons (Brave) draw none
+no_window_buttons() {
+    gsettings set org.gnome.desktop.wm.preferences button-layout 'appmenu:'
+}
+
 install_hc() {
     # herdr-core keeps agents' terminals alive and reports their status, lookout shows them. It updates
     # itself with `hc update`, so only install it once
@@ -202,6 +207,7 @@ if [ "$MACHINE" = xps ]; then
 fi
 create_symlinks
 prefer_dark
+no_window_buttons
 install_hc
 if [ "$MACHINE" = pc ]; then
     start_hc_at_boot
