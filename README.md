@@ -6,6 +6,7 @@
  - `start-hyprland`
  - `claude`, `/remote-control`
  - `lookout/glyphs.sh`, `cargo run --release --features shot -- shot out.png --peek` to see the bar without restarting it
+ - Brave in the bar's colours: `brave://extensions`, Developer mode, Load unpacked `~/dotfiles/brave/theme`
  - Agents: `hc` (`hc ls`, `hc attach`), XPS once: `hc machine add desktop --name desktop`
  - PC: `aux`, `speakers`
  - XPS: `gpu`, `gpu-on`, `gpu-off`, `prime-run`, `battery-health`

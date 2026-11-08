@@ -1,0 +1,24 @@
+{
+    "manifest_version": 3,
+    "name": "lookout",
+    "version": "1.0",
+    "description": "Brave in lookout's colours: tabs on the bar's black, the page's chrome one step up like a terminal",
+    "theme": {
+        "colors": {
+            "frame": [0, 0, 0],
+            "frame_inactive": [0, 0, 0],
+            "background_tab": [0, 0, 0],
+            "background_tab_inactive": [0, 0, 0],
+            "toolbar": [20, 20, 20],
+            "tab_text": [230, 230, 230],
+            "tab_background_text": [138, 138, 138],
+            "tab_background_text_inactive": [138, 138, 138],
+            "toolbar_text": [230, 230, 230],
+            "toolbar_button_icon": [180, 180, 180],
+            "bookmark_text": [180, 180, 180],
+            "omnibox_text": [230, 230, 230],
+            "ntp_background": [20, 20, 20],
+            "ntp_text": [230, 230, 230]
+        }
+    }
+}
