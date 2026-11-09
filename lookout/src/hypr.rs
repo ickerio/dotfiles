@@ -1,5 +1,6 @@
 //! Hyprland's IPC: its event socket says which window is focused, and hyprctl finds and focuses windows
 
+use std::collections::HashMap;
 use std::env;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -148,6 +149,21 @@ pub fn windows() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Where a window is: workspace, top edge, left edge. Sorted, that's reading order: workspace by workspace, each
+/// like a page of a book
+pub type Place = (i64, i64, i64);
+
+/// Where each agent's window is, by the terminal's address. None if Hyprland didn't answer
+pub fn places() -> Option<HashMap<String, Place>> {
+    let Value::Array(clients) = request("j/clients")? else { return None };
+    let place = |c: &Value| {
+        let addr = c["class"].as_str()?.strip_prefix("hc:")?;
+        Some((addr.to_string(), (c["workspace"]["id"].as_i64()?, c["at"][1].as_i64()?, c["at"][0].as_i64()?)))
+    };
+    // Special workspaces have negative ids and no number to go under
+    Some(clients.iter().filter(|c| c["mapped"] == true).filter_map(place).filter(|(_, p)| p.0 > 0).collect())
+}
+
 /// Whether a fullscreen window on the focused workspace hides the bar
 pub fn fullscreen() -> bool {
     request("j/activeworkspace").is_some_and(|w| w["hasfullscreen"] == true)
@@ -161,6 +177,12 @@ pub fn workspace() -> String {
 /// The focused window's class right now. Events only say when it changes
 pub fn focused_class() -> Option<String> {
     request("j/activewindow")?["class"].as_str().map(String::from)
+}
+
+/// Switches to workspace `ws`
+pub fn go_to_workspace(ws: i64) {
+    let lua = format!("hl.dsp.focus({{ workspace = {ws} }})");
+    let _ = Command::new("hyprctl").args(["dispatch", &lua]).output();
 }
 
 /// Focuses the window at `address`, switching to its workspace

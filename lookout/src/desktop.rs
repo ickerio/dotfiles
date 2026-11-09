@@ -19,7 +19,7 @@ use crate::agents::{Agent, Agents};
 use crate::cmd;
 use crate::draw::Canvas;
 use crate::hc;
-use crate::hypr::{self, Hypr};
+use crate::hypr::{self, Hypr, Place};
 use crate::keys::{self, Keys};
 use crate::picker::{self, Action, Mode, Picker, Shows};
 use crate::stats::{Item, Stats};
@@ -121,10 +121,11 @@ pub fn run() -> ! {
             desktop.agents_changed();
         }
         if ready(hypr_fd) {
-            let mut moved = false;
+            let (mut moved, mut focused) = (false, false);
             for event in desktop.hypr.read() {
                 match event {
                     hypr::Event::Focus(class) => {
+                        focused = true;
                         if desktop.agents.focus(&class) {
                             desktop.agents_changed();
                         }
@@ -147,6 +148,10 @@ pub fn run() -> ! {
             if moved {
                 desktop.close_picker();
                 desktop.update_fullscreen();
+            }
+            // On focus too, since flipping a split moves windows without an event of its own
+            if moved || focused {
+                desktop.update_places();
             }
         }
 
@@ -274,6 +279,9 @@ struct Desktop {
     clock: (String, String),
     refreshed: Instant,
     agents: Agents,
+    /// The agents in the bar's order, and where their windows are, which it comes from
+    tabs: Vec<Agent>,
+    places: HashMap<String, Place>,
     /// The agents in the bar's order
     list: Vec<Agent>,
     /// Agents that just started wanting you, until when their pill shows brighter
@@ -371,6 +379,8 @@ impl Desktop {
             items: Vec::new(),
             refreshed: Instant::now(),
             agents: Agents::new(),
+            tabs: Vec::new(),
+            places: hypr::places().unwrap_or_default(),
             list: Vec::new(),
             flash: HashMap::new(),
             wanting: HashSet::new(),
@@ -632,6 +642,7 @@ impl Desktop {
         match self.hit().map(|(_, hit)| hit.clone()) {
             Some(Hit::Do(action) | Hit::Row(_, action)) => self.act(action),
             // The rest of the bar opens the search, or puts it away
+            Some(Hit::Workspace(ws)) => hypr::go_to_workspace(ws),
             Some(Hit::Sheet) if self.picker.is_some() => self.close_picker(),
             Some(Hit::Sheet) => self.open_search(),
             None => {}
@@ -977,10 +988,23 @@ impl Desktop {
         let next: String = list.iter().filter(|a| wanting.contains(&a.addr)).map(|a| format!("{}\t{}\n", a.addr, a.label())).collect();
         let _ = fs::write(cmd::seen_file(), next);
         (self.list, self.wanting) = (list, wanting);
-        self.bar.dirty = true;
+        self.arrange_tabs();
         self.sheet.dirty |= self.sheet.show;
         self.update_line();
         self.update_search();
+    }
+
+    /// Looks where the agents' windows are now, rearranging the tabs if that's changed
+    fn update_places(&mut self) {
+        let Some(places) = hypr::places().filter(|p| *p != self.places) else { return };
+        self.places = places;
+        self.arrange_tabs();
+    }
+
+    fn arrange_tabs(&mut self) {
+        self.tabs = self.list.clone();
+        ui::by_place(&mut self.tabs, &self.places);
+        self.bar.dirty = true;
     }
 
     fn draw(&mut self) {
@@ -1022,10 +1046,11 @@ impl Desktop {
         let pointer = |hover: Option<(u32, i32, i32)>, surface: u32| hover.filter(|h| h.0 == surface).map(|(_, x, y)| (x, y));
         let flash = |addr: &str| self.flash.contains_key(addr);
         let view = View {
-            agents: &self.list,
+            agents: &self.tabs,
             focused: self.agents.focused(),
             stats: &self.items,
             clock: (&self.clock.0, &self.clock.1),
+            places: &self.places,
             workspace: &self.workspace,
             now_ms,
             flash: &flash,

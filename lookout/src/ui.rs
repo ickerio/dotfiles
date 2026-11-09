@@ -1,7 +1,8 @@
 //! What lookout looks like, drawn the same way live and by `lookout shot`:
 //!
-//! - the bar across the top of the screen: every agent as a tab, the ones that want you first as tinted pills
-//!   saying what they want, then the rest in a steady order, and the stats and clock on the right
+//! - the bar across the top of the screen: every agent as a tab in the order their windows are on screen, grouped
+//!   under each workspace's number with a line between, then the ones with no window with no number. The ones that
+//!   want you are tinted pills, and the stats and clock are on the right. What they want is in the sheet
 //! - the sheet that hangs from its middle on SUPER + A or a click: every agent in detail, with a line to type into to
 //!   go to any terminal or start an agent (see picker.rs)
 //! - a 2px line across the top when a fullscreen window hides the bar, a stretch of it for each agent that wants
@@ -14,9 +15,12 @@
 //!
 //! Nothing animates, so nothing wakes up to redraw: it changes when the agents or the minute do
 
+use std::collections::HashMap;
+
 use crate::agents::Agent;
 use crate::draw::{opaque, width, Canvas};
 use crate::font::Size;
+use crate::hypr::Place;
 use crate::picker::{Action, Match, Mode, Picker, Section, MACHINE, NAME, PLACE};
 use crate::stats::Item;
 
@@ -33,14 +37,17 @@ const TAB_GAP: i32 = 4;
 /// Icons fit a box this big, with this gap before their label
 const ICON: i32 = 10;
 const ICON_GAP: i32 = 7;
-/// Between the runs inside a tab (name, state, message, age) and between the stats
+/// Between the runs inside a tab (name, age) and between the stats
 const SPACE: i32 = 8;
 const STAT_GAP: i32 = 18;
-/// Between the workspace's number and the first agent's icon
+/// Before the hint that shows when there are no agents
 const WORKSPACE_GAP: i32 = 24;
-/// Longest a message gets in a pill, and in the sheet
-const PILL_MSG: usize = 28;
-const SHEET_MSG: usize = 46;
+/// Each side of the line between workspaces, its height, and between a workspace's number and its first tab
+const DIVIDER_GAP: i32 = 9;
+const DIVIDER_H: i32 = 14;
+const NUM_GAP: i32 = 4;
+/// Inside a tab that's only an icon, so it's as wide as a pill is tall
+const ICON_PAD: i32 = 5;
 const NAME_COLS: usize = 16;
 /// Pills show how long they've been waiting from this many seconds, and it turns bright from STALE
 const SHOW_AGE: u64 = 180;
@@ -78,6 +85,7 @@ const COUNT: u32 = 0x3a3a3a;
 pub const SAYS: u32 = 0xb4b4b4;
 /// Under a tab the pointer's over
 const HOVER_RULE: u32 = 0x3a3a3a;
+const DIVIDER: u32 = 0x3a3a3a;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Icon {
@@ -142,13 +150,15 @@ pub fn line_colours(agents: &[Agent]) -> Vec<u32> {
 
 /// Everything there is to show
 pub struct View<'a> {
-    /// Ordered as `order` leaves them
+    /// The bar's tabs, ordered as `by_place` leaves them
     pub agents: &'a [Agent],
     /// Address of the agent whose window is focused
     pub focused: Option<&'a str>,
     pub stats: &'a [Item],
     /// "14:32" and "Sat 7 Nov"
     pub clock: (&'a str, &'a str),
+    /// Where each agent's window is, by address
+    pub places: &'a HashMap<String, Place>,
     /// The name of the workspace showing, "2"
     pub workspace: &'a str,
     pub now_ms: u64,
@@ -167,15 +177,23 @@ pub enum Hit {
     Sheet,
     /// A row of the sheet's, by its place in the list, and what it does
     Row(usize, Action),
+    /// Go to this workspace
+    Workspace(i64),
 }
 
-/// The order agents go in: the ones that want you first, most first and then longest waiting, then the rest by
-/// name, so tabs only move when something starts or stops wanting you
+/// The order for the sheet and `lookout next`: the ones that want you first, most first and then longest waiting,
+/// then the rest by name
 pub fn order(agents: &mut [Agent]) {
     agents.sort_by(|a, b| {
         let key = |a: &Agent| (a.urgency().unwrap_or(u8::MAX), if a.urgency().is_some() { a.since } else { 0 });
         key(a).cmp(&key(b)).then_with(|| a.label().cmp(b.label())).then_with(|| a.addr.cmp(&b.addr))
     });
+}
+
+/// The bar's order: as their windows are on screen, so tabs only move when windows do. Agents with no window go last
+pub fn by_place(agents: &mut [Agent], places: &HashMap<String, Place>) {
+    let place = |a: &Agent| places.get(&a.addr).copied().unwrap_or((i64::MAX, 0, 0));
+    agents.sort_by(|a, b| place(a).cmp(&place(b)).then_with(|| a.label().cmp(b.label())).then_with(|| a.addr.cmp(&b.addr)));
 }
 
 /// "40s", "3m", "2h", "4d"
@@ -246,6 +264,12 @@ pub fn cut(s: &str, cols: usize) -> String {
 fn text_top(size: Size, mid: i32) -> i32 {
     let f = size.font();
     mid - (f.top + f.baseline) / 2
+}
+
+/// Where the top of an icon goes on a line of text centred on `mid`: a pixel low, since the text beside it is mostly
+/// lower case, which sits lower than the digits it's centred by
+fn icon_top(mid: i32) -> i32 {
+    mid - ICON / 2 + 1
 }
 
 impl Canvas<'_> {
@@ -324,30 +348,18 @@ impl Canvas<'_> {
     }
 }
 
-/// How much detail the bar's tabs go into, less and less until they fit. What asks nothing of you goes first, what
-/// you're asked goes last
+/// How much detail the bar's tabs go into, less and less until they fit. What asks nothing of you goes first
 #[derive(Clone, Copy)]
 struct Detail {
-    /// Agents that don't want you shown as one tab per group rather than one each. The focused one stays
+    /// Quiet agents left to the sheet, and busy ones only an icon. The focused one stays as it is
     fold_quiet: bool,
     fold_busy: bool,
-    /// Characters of message in a pill for an agent that asks, has failed, or is done, before any room left over
-    /// is shared out. Done gives its words up first, asking last
-    msg: [usize; 3],
-    /// The state word in pills
-    word: bool,
 }
 
-const DETAILS: [Detail; 9] = [
-    Detail { fold_quiet: false, fold_busy: false, msg: [PILL_MSG; 3], word: true },
-    Detail { fold_quiet: true, fold_busy: false, msg: [PILL_MSG; 3], word: true },
-    Detail { fold_quiet: true, fold_busy: true, msg: [PILL_MSG; 3], word: true },
-    Detail { fold_quiet: true, fold_busy: true, msg: [PILL_MSG, PILL_MSG, 0], word: true },
-    Detail { fold_quiet: true, fold_busy: true, msg: [PILL_MSG, 14, 0], word: true },
-    Detail { fold_quiet: true, fold_busy: true, msg: [PILL_MSG, 0, 0], word: true },
-    Detail { fold_quiet: true, fold_busy: true, msg: [14, 0, 0], word: true },
-    Detail { fold_quiet: true, fold_busy: true, msg: [0, 0, 0], word: true },
-    Detail { fold_quiet: true, fold_busy: true, msg: [0, 0, 0], word: false },
+const DETAILS: [Detail; 3] = [
+    Detail { fold_quiet: false, fold_busy: false },
+    Detail { fold_quiet: true, fold_busy: false },
+    Detail { fold_quiet: true, fold_busy: true },
 ];
 
 /// One tab: maybe an icon, and runs of text, maybe on a pill
@@ -355,8 +367,6 @@ struct Tab {
     icon: Option<(Icon, u32)>,
     tint: Option<u32>,
     runs: Vec<(String, u32)>,
-    /// Which run is the message, and the whole of it, so it can grow into room left over
-    msg: Option<(usize, String)>,
     /// Pixels the icon and name take, for the focus underline
     name_w: i32,
     focused: bool,
@@ -364,43 +374,47 @@ struct Tab {
 }
 
 impl Tab {
+    fn pad(&self) -> i32 {
+        if self.runs.is_empty() { ICON_PAD } else { PILL_PAD }
+    }
+
     fn width(&self) -> i32 {
+        if self.runs.is_empty() {
+            return ICON + ICON_PAD * 2;
+        }
         let runs: i32 = self.runs.iter().map(|(s, _)| width(Size::Ui, s)).sum::<i32>() + SPACE * (self.runs.len() as i32 - 1);
         PILL_PAD * 2 + self.icon.map_or(0, |_| ICON + ICON_GAP) + runs
     }
+}
 
-    /// Shows up to `cols` of its message, if it has one
-    fn set_msg(&mut self, cols: usize) {
-        if let Some((i, msg)) = &self.msg {
-            self.runs[*i].0 = cut(msg, cols);
-        }
+/// The tabs of one workspace, whose number leads them, or of the agents with no window, when `ws` is None
+struct TabGroup {
+    ws: Option<i64>,
+    tabs: Vec<Tab>,
+}
+
+impl TabGroup {
+    /// The space after the line before it. A plain tab with no number in front brings its own
+    fn after_divider(&self) -> i32 {
+        if self.ws.is_none() && self.tabs.first().is_some_and(|t| t.tint.is_none()) { 1 } else { DIVIDER_GAP }
+    }
+
+    fn width(&self) -> i32 {
+        let number = self.ws.map_or(0, |ws| width(Size::Ui, &ws.to_string()));
+        let gap = if self.ws.is_some() && !self.tabs.is_empty() { NUM_GAP } else { 0 };
+        number + gap + tabs_width(&self.tabs)
     }
 }
 
-fn agent_tab(view: &View, agent: &Agent, detail: Detail) -> Tab {
+fn agent_tab(view: &View, agent: &Agent) -> Tab {
     let look = look(agent);
     let name = cut(agent.label(), NAME_COLS);
     // Quiet agents need no icon, their dim name says it
     let icon = (look.group != Group::Quiet).then_some((look.icon, look.accent));
     let name_w = icon.map_or(0, |_| ICON + ICON_GAP) + width(Size::Ui, &name);
     let mut runs = vec![(name, look.name)];
-    let mut msg = None;
-    if look.group == Group::Needs {
-        if detail.word {
-            runs.push((look.word.to_string(), if look.icon == Icon::Done { MID } else { look.accent }));
-        }
-        let cols = detail.msg[match look.icon {
-            Icon::Ask => 0,
-            Icon::Error => 1,
-            _ => 2,
-        }];
-        if let Some(text) = message(agent).filter(|_| cols > 0) {
-            msg = Some((runs.len(), text.clone()));
-            runs.push((cut(&text, cols), SAYS));
-        }
-        if let Some(secs) = secs(view, agent).filter(|s| *s >= SHOW_AGE) {
-            runs.push((age(secs), if secs >= STALE { INK } else { DIM }));
-        }
+    if let Some(secs) = secs(view, agent).filter(|s| look.group == Group::Needs && *s >= SHOW_AGE) {
+        runs.push((age(secs), if secs >= STALE { INK } else { DIM }));
     }
     // Just started wanting you: the pill brighter, its words white so they still read on it
     let flash = (view.flash)(&agent.addr);
@@ -412,40 +426,59 @@ fn agent_tab(view: &View, agent: &Agent, detail: Detail) -> Tab {
         icon,
         tint,
         runs,
-        msg,
         name_w,
         focused: view.focused == Some(agent.addr.as_str()),
         hit: Hit::Do(Action::Go { addr: agent.addr.clone(), label: agent.label().to_string(), resume: None }),
     }
 }
 
-/// A tab standing for several agents, "3 busy", or for those left out, "+3"
-fn group_tab(icon: Option<(Icon, u32)>, text: String, colour: u32) -> Tab {
-    Tab { icon, tint: None, runs: vec![(text, colour)], msg: None, name_w: 0, focused: false, hit: Hit::Sheet }
+/// The agents as `view` has them ordered, a group for each workspace. The workspace showing has one even with nothing
+/// on it, so you can always see where you are
+fn groups(view: &View, detail: Detail) -> Vec<TabGroup> {
+    let mut groups: Vec<TabGroup> = Vec::new();
+    for agent in view.agents {
+        let ws = view.places.get(&agent.addr).map(|place| place.0);
+        if groups.last().is_none_or(|g| g.ws != ws) {
+            groups.push(TabGroup { ws, tabs: Vec::new() });
+        }
+        let focused = view.focused == Some(agent.addr.as_str());
+        let tab = match look(agent).group {
+            Group::Quiet if detail.fold_quiet && !focused => continue,
+            Group::Busy if detail.fold_busy && !focused => Tab { runs: Vec::new(), ..agent_tab(view, agent) },
+            _ => agent_tab(view, agent),
+        };
+        groups.last_mut().unwrap().tabs.push(tab);
+    }
+    groups.retain(|g| g.ws.is_some() || !g.tabs.is_empty());
+    if let Some(current) = current_workspace(view).filter(|c| !groups.iter().any(|g| g.ws == Some(*c))) {
+        let at = groups.iter().position(|g| g.ws.is_none_or(|ws| ws > current)).unwrap_or(groups.len());
+        groups.insert(at, TabGroup { ws: Some(current), tabs: Vec::new() });
+    }
+    groups
 }
 
-fn tabs(view: &View, detail: Detail) -> Vec<Tab> {
-    let mut tabs = Vec::new();
-    let (mut busy, mut quiet) = (0, 0);
-    for agent in view.agents {
-        let focused = view.focused == Some(agent.addr.as_str());
-        match look(agent).group {
-            Group::Busy if detail.fold_busy && !focused => busy += 1,
-            Group::Quiet if detail.fold_quiet && !focused => quiet += 1,
-            _ => tabs.push(agent_tab(view, agent, detail)),
-        }
+fn current_workspace(view: &View) -> Option<i64> {
+    view.workspace.parse().ok()
+}
+
+/// Takes a tab out to make room: the last that doesn't want you, if there is one
+fn drop_tab(groups: &mut [TabGroup]) {
+    let spots = || groups.iter().enumerate().flat_map(|(g, group)| group.tabs.iter().enumerate().map(move |(t, tab)| (g, t, tab.tint.is_none())));
+    if let Some((g, t, _)) = spots().filter(|spot| spot.2).last().or(spots().last()) {
+        groups[g].tabs.remove(t);
     }
-    if busy > 0 {
-        tabs.push(group_tab(Some((Icon::Working, MID)), format!("{busy} busy"), MID));
-    }
-    if quiet > 0 {
-        tabs.push(group_tab(None, format!("{quiet} quiet"), DIM));
-    }
-    tabs
+}
+
+fn tab_count(groups: &[TabGroup]) -> usize {
+    groups.iter().map(|g| g.tabs.len()).sum()
 }
 
 fn tabs_width(tabs: &[Tab]) -> i32 {
-    tabs.iter().map(|t| t.width() + TAB_GAP).sum::<i32>() - TAB_GAP
+    (tabs.iter().map(|t| t.width() + TAB_GAP).sum::<i32>() - TAB_GAP).max(0)
+}
+
+fn groups_width(groups: &[TabGroup]) -> i32 {
+    groups.iter().enumerate().map(|(i, g)| g.width() + if i > 0 { DIVIDER_GAP + 1 + g.after_divider() } else { 0 }).sum()
 }
 
 /// Draws the bar, returning which spans of it do what when clicked
@@ -485,30 +518,22 @@ fn bar_with(c: &mut Canvas, view: &View, stats: &[Item], last: bool) -> Option<V
     hits.push((x - STAT_GAP / 2, right_end + PAD, Hit::Sheet));
     let room = x - STAT_GAP - PAD;
 
-    // The workspace showing, quietly, where the bar starts
-    let mut start = PAD;
-    if !view.workspace.is_empty() {
-        let name = cut(view.workspace, 8);
-        start = c.text(PAD, ty, Size::Ui, &name, MID) + WORKSPACE_GAP - PILL_PAD;
-    }
-    let room = room - (start - PAD);
-
     // The agents, in as much detail as fits
-    let mut tabs = Vec::new();
+    let mut groups = Vec::new();
     for detail in DETAILS {
-        tabs = self::tabs(view, detail);
-        if PAD + tabs_width(&tabs) <= room {
+        groups = self::groups(view, detail);
+        if PAD + groups_width(&groups) <= room {
             break;
         }
     }
-    // Still too many: the last of them become "+N", with room kept for it
-    let more = |n: usize| group_tab(None, format!("+{n}"), MID);
+    // Still too many: some of them become "+N", with room kept for it and a line before it
+    let more = |n: usize| Tab { icon: None, tint: None, runs: vec![(format!("+{n}"), MID)], name_w: 0, focused: false, hit: Hit::Sheet };
     let mut hidden = 0;
-    while tabs.len() > 1 && PAD + tabs_width(&tabs) > room {
-        tabs.pop();
+    while tab_count(&groups) > 1 && PAD + groups_width(&groups) > room {
+        drop_tab(&mut groups);
         hidden += 1;
-        while tabs.len() > 1 && PAD + tabs_width(&tabs) + TAB_GAP + more(hidden).width() > room {
-            tabs.pop();
+        while tab_count(&groups) > 1 && PAD + groups_width(&groups) + DIVIDER_GAP * 2 + 1 + more(hidden).width() > room {
+            drop_tab(&mut groups);
             hidden += 1;
         }
     }
@@ -516,44 +541,55 @@ fn bar_with(c: &mut Canvas, view: &View, stats: &[Item], last: bool) -> Option<V
         if !last && stats.len() > 1 {
             return None;
         }
-        tabs.push(more(hidden));
+        if groups.last().is_none_or(|g| g.ws.is_some()) {
+            groups.push(TabGroup { ws: None, tabs: Vec::new() });
+        }
+        groups.last_mut().unwrap().tabs.push(more(hidden));
     }
-    // Room left over goes to what's asked, most wanting first
-    for i in 0..tabs.len() {
-        let Some(full) = tabs[i].msg.as_ref().map(|(_, m)| m.chars().count()) else { continue };
-        let shown = tabs[i].runs[tabs[i].msg.as_ref().unwrap().0].0.chars().count();
-        let spare = ((room - PAD - tabs_width(&tabs)) / Size::Ui.font().advance).max(0) as usize;
-        tabs[i].set_msg((shown + spare).min(full).min(SHEET_MSG));
-    }
-
-    let mut x = start;
+    let mut x = PAD;
     let pill_y = (BAR_H - PILL_H) / 2;
-    for tab in &tabs {
-        let w = tab.width();
-        let hovered = view.pointer.is_some_and(|(px, _)| px >= x && px < x + w);
-        // A pill brightens under the pointer, and a plain tab gets a faint underline where focus has its bright one
-        match tab.tint {
-            Some(tint) => c.round_rect(x, pill_y, w, PILL_H, PILL_R, if hovered { Canvas::mix(tint, INK, 0.08) } else { tint }),
-            None if hovered && !tab.focused => c.fill(x + PILL_PAD, BAR_H - 2, w - 2 * PILL_PAD, 2, opaque(HOVER_RULE)),
-            None => {}
+    let current = current_workspace(view);
+    for (i, group) in groups.iter().enumerate() {
+        if i > 0 {
+            x += DIVIDER_GAP;
+            c.fill(x, (BAR_H - DIVIDER_H) / 2, 1, DIVIDER_H, opaque(DIVIDER));
+            x += 1 + group.after_divider();
         }
-        let ix = x + PILL_PAD;
-        let mut tx = ix;
-        if let Some((icon, colour)) = tab.icon {
-            c.icon(icon, ix, mid - ICON / 2, colour);
-            tx += ICON + ICON_GAP;
+        if let Some(ws) = group.ws {
+            let end = c.text(x, ty, Size::Ui, &ws.to_string(), if Some(ws) == current { INK } else { DIM });
+            hits.push((x - NUM_GAP, end + NUM_GAP / 2, Hit::Workspace(ws)));
+            x = end + if group.tabs.is_empty() { 0 } else { NUM_GAP };
         }
-        for (s, colour) in &tab.runs {
-            tx = c.text(tx, ty, Size::Ui, s, if tab.focused && tab.tint.is_none() { INK } else { *colour }) + SPACE;
+        for tab in &group.tabs {
+            let w = tab.width();
+            let hovered = view.pointer.is_some_and(|(px, _)| px >= x && px < x + w);
+            // A pill brightens under the pointer, and a plain tab gets a faint underline where focus has its bright one
+            match tab.tint {
+                Some(tint) => c.round_rect(x, pill_y, w, PILL_H, PILL_R, if hovered { Canvas::mix(tint, INK, 0.08) } else { tint }),
+                None if hovered && !tab.focused => c.fill(x + tab.pad(), BAR_H - 2, w - 2 * tab.pad(), 2, opaque(HOVER_RULE)),
+                None => {}
+            }
+            let ix = x + tab.pad();
+            let mut tx = ix;
+            if let Some((icon, colour)) = tab.icon {
+                c.icon(icon, ix, icon_top(mid), colour);
+                tx += ICON + ICON_GAP;
+            }
+            for (s, colour) in &tab.runs {
+                tx = c.text(tx, ty, Size::Ui, s, if tab.focused && tab.tint.is_none() { INK } else { *colour }) + SPACE;
+            }
+            if tab.focused {
+                c.fill(ix, BAR_H - 2, tab.name_w, 2, opaque(INK));
+            }
+            hits.push((x - TAB_GAP / 2, x + w + TAB_GAP / 2, tab.hit.clone()));
+            x += w + TAB_GAP;
         }
-        if tab.focused {
-            c.fill(ix, BAR_H - 2, tab.name_w, 2, opaque(INK));
+        if !group.tabs.is_empty() {
+            x -= TAB_GAP;
         }
-        hits.push((x - TAB_GAP / 2, x + w + TAB_GAP / 2, tab.hit.clone()));
-        x += w + TAB_GAP;
     }
     if view.agents.is_empty() {
-        let x = c.text(start + PILL_PAD, ty, Size::Ui, "no agents", DIM) + 18;
+        let x = c.text(x + WORKSPACE_GAP, ty, Size::Ui, "no agents", DIM) + 18;
         let x = c.text(x, ty, Size::Ui, "super shift a", MID) + SPACE;
         c.text(x, ty, Size::Ui, "new", DIM);
     }
@@ -698,7 +734,7 @@ pub fn sheet(c: &mut Canvas, view: &View, list: &Picker) -> (Vec<(i32, i32, Hit)
         }
         let mid = y + ROW_H / 2;
         if let Some((icon, colour)) = item.icon {
-            c.icon(icon, SHEET_ICON, mid - ICON / 2, colour);
+            c.icon(icon, SHEET_ICON, icon_top(mid), colour);
         }
         // The age, right-aligned, and what it says up to it
         let mut end = right;
@@ -776,7 +812,7 @@ fn input(c: &mut Canvas, list: &Picker) {
     let hint_w = |keys: &str, what: &str| width(Size::Ui, keys) + SPACE + width(Size::Ui, what);
     match list.mode {
         Mode::Search | Mode::Projects => {
-            c.icon(Icon::Search, SHEET_ICON, mid - ICON / 2, INK);
+            c.icon(Icon::Search, SHEET_ICON, icon_top(mid), INK);
             let mut x = name_x;
             if !list.prompt.is_empty() {
                 x = c.text(x, ty, Size::Ui, &list.prompt, MID) + SPACE;
@@ -804,7 +840,7 @@ fn input(c: &mut Canvas, list: &Picker) {
             c.text(name_x, ty, Size::Ui, &list.prompt, INK);
         }
         Mode::Note => {
-            c.icon(Icon::Error, SHEET_ICON, mid - ICON / 2, RED);
+            c.icon(Icon::Error, SHEET_ICON, icon_top(mid), RED);
             c.text(name_x, ty, Size::Ui, &list.prompt, INK);
             hint(c, right - hint_w("esc", "close"), "esc", "close", DIM);
         }

@@ -46,6 +46,11 @@ pub fn run(args: &[String]) {
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
     let mut agents = demo(now_ms, if flag("--many") { "many" } else if flag("--few") { "few" } else if flag("--none") { "none" } else if flag("--calm") { "calm" } else { "" });
     ui::order(&mut agents);
+    // Three to a workspace, and the last with no window
+    let places: HashMap<String, (i64, i64, i64)> =
+        agents.iter().take(agents.len().saturating_sub(1)).enumerate().map(|(i, a)| (a.addr.clone(), (i as i64 / 3 + 1, 38, i as i64))).collect();
+    let mut tabs = agents.clone();
+    ui::by_place(&mut tabs, &places);
     let (items, clock) = (
         vec![("BAT", "84".to_string(), None), ("WIFI", "91".into(), None), ("CPU", "12".into(), None), ("MEM", "3.6".into(), Some("/15".into()))],
         ("14:32", "Sat 7 Nov"),
@@ -79,10 +84,11 @@ pub fn run(args: &[String]) {
         list.type_text(&typed);
     }
     let view = |pointer| View {
-        agents: &agents,
+        agents: &tabs,
         focused: Some("t10"),
         stats: &items,
         clock,
+        places: &places,
         workspace: "2",
         now_ms,
         flash: &flash,
