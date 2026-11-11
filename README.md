@@ -5,6 +5,7 @@
  - `sudo tailscale up [--ssh]`
  - `start-hyprland`
  - `claude`, `/remote-control`
+ - Claude accounts: `claude-account` lists, `claude-account <name>` switches, `claude-account save <name>` after a `/login`
  - `lookout/glyphs.sh`, `cargo run --release --features shot -- shot out.png --pick` to see the bar without restarting it
  - Brave in the bar's colours: `brave://extensions`, Developer mode, Load unpacked `~/dotfiles/brave/theme`
  - Agents: `hc` (`hc ls`, `hc attach`), XPS once: `hc machine add desktop --name desktop`

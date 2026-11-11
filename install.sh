@@ -30,7 +30,7 @@ install_packages() {
     echo "Installing packages"
     sudo pacman -S --needed hyprland hyprpaper foot openssh nano spotify-launcher ttf-jetbrains-mono noto-fonts \
         pipewire-pulse wireplumber playerctl code unzip bun prismlauncher rust tailscale \
-        grim slurp wl-clipboard
+        grim slurp wl-clipboard python
 
     case "$MACHINE" in
         pc)
@@ -136,6 +136,11 @@ create_symlinks() {
     # Arch's default .bashrc from /etc/skel is fine to replace
     ln -sf "$(pwd)/bash/bashrc" ~/.bashrc
     link "$(pwd)/machines/$MACHINE/bashrc.sh" ~/.bashrc.local
+
+    mkdir -p ~/.local/bin
+    for bin in bin/*; do
+        link "$(pwd)/$bin" ~/.local/bin/"$(basename "$bin")"
+    done
 }
 
 # Apps and websites that follow the system's light or dark choice pick dark. Brave follows it once its theme is

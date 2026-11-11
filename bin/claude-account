@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Switch the Claude account Claude Code is logged in as. Only the login is swapped (claudeAiOauth in
+.credentials.json, oauthAccount in .claude.json), so sessions, MCP servers and their logins, settings,
+plugins and history all stay shared between accounts.
+
+  claude-account              list saved accounts, * marks the current one
+  claude-account <name>       switch to <name>
+  claude-account save <name>  save the current login as <name>, then /login to another account and save that too
+  claude-account rm <name>    forget <name>
+
+Logins are kept in ~/.claude/accounts. Running sessions keep the account they started with, so restart them
+after a switch (`claude -c` carries on where you left off).
+"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+# Claude Code keeps both files in CLAUDE_CONFIG_DIR when it's set
+CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR")
+CREDS = Path(CONFIG_DIR or HOME / ".claude") / ".credentials.json"
+CONFIG = Path(CONFIG_DIR) / ".claude.json" if CONFIG_DIR else HOME / ".claude.json"
+ACCOUNTS = HOME / ".claude" / "accounts"
+
+
+def die(message):
+    sys.exit(f"claude-account: {message}")
+
+
+def load(path):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+
+
+def write(path, data):
+    # Same folder then rename, so Claude never reads half a file. Keeps the file's permissions
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    tmp = path.with_name(f".{path.name}.claude-account.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+
+def current():
+    return load(CREDS).get("claudeAiOauth"), load(CONFIG).get("oauthAccount")
+
+
+def same(a, b):
+    return bool(a and b) and all(a.get(k) == b.get(k) for k in ("accountUuid", "organizationUuid"))
+
+
+def accounts():
+    return {p.stem: load(p) for p in sorted(ACCOUNTS.glob("*.json"))}
+
+
+def slot(name):
+    if not name or "/" in name or name.startswith("."):
+        die(f"bad name {name!r}")
+    return ACCOUNTS / f"{name}.json"
+
+
+def save_back():
+    """Copies the live login back to its saved account, since Claude rotates the tokens as it refreshes them
+    and the saved ones stop working. Returns that account's name, or None if it isn't saved."""
+    oauth, account = current()
+    for name, saved in accounts().items():
+        if same(saved.get("oauthAccount"), account):
+            if oauth and saved != {"claudeAiOauth": oauth, "oauthAccount": account}:
+                write(slot(name), {"claudeAiOauth": oauth, "oauthAccount": account})
+            return name
+    return None
+
+
+def list_accounts():
+    _, account = current()
+    saved = accounts()
+    if not saved:
+        print("No saved accounts. Save the current login with: claude-account save <name>")
+    now = time.time() * 1000
+    for name, s in saved.items():
+        oauth, acct = s.get("claudeAiOauth", {}), s.get("oauthAccount", {})
+        mark = "*" if same(acct, account) else " "
+        plan = oauth.get("subscriptionType") or "?"
+        expired = "  login expired, /login and save again" if oauth.get("refreshTokenExpiresAt", now + 1) < now else ""
+        print(f"{mark} {name:<12} {acct.get('emailAddress', '?'):<32} {plan}{expired}")
+    if account and not any(same(s.get("oauthAccount"), account) for s in saved.values()):
+        print(f"* (unsaved)    {account.get('emailAddress', '?')}")
+
+
+def save(name):
+    oauth, account = current()
+    if not oauth or not account:
+        die("not logged in, run claude and /login first")
+    for other, s in accounts().items():
+        if other != name and same(s.get("oauthAccount"), account):
+            die(f"{account.get('emailAddress')} is already saved as {other}")
+    ACCOUNTS.mkdir(mode=0o700, parents=True, exist_ok=True)
+    write(slot(name), {"claudeAiOauth": oauth, "oauthAccount": account})
+    print(f"Saved {account.get('emailAddress')} as {name}")
+
+
+def switch(name):
+    target = load(slot(name))
+    if not target:
+        die(f"no account called {name}, see: claude-account")
+    oauth, account = current()
+    was = save_back()
+    if oauth and was is None:
+        die(f"{account.get('emailAddress', 'the current login')} isn't saved, so switching would lose it. "
+            "Save it first with: claude-account save <name>")
+    if was == name:
+        print(f"Already on {name}")
+        return
+
+    creds = load(CREDS)  # keeps mcpOAuth, MCP logins are shared
+    creds["claudeAiOauth"] = target["claudeAiOauth"]
+    write(CREDS, creds)
+    # Re-read just before writing, Claude rewrites this file all the time
+    config = load(CONFIG)
+    config["oauthAccount"] = target["oauthAccount"]
+    write(CONFIG, config)
+    print(f"Switched to {name} ({target['oauthAccount'].get('emailAddress')}). "
+          "Restart running sessions, claude -c carries on")
+
+
+def main(args):
+    match args:
+        case []:
+            list_accounts()
+        case ["save", name]:
+            save(name)
+        case ["rm", name]:
+            if not slot(name).exists():
+                die(f"no account called {name}")
+            slot(name).unlink()
+            print(f"Forgot {name}")
+        case [name] if not name.startswith("-"):
+            switch(name)
+        case _:
+            print(__doc__.strip())
+            sys.exit(1)
+
+
+main(sys.argv[1:])

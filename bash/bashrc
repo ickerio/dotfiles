@@ -24,6 +24,12 @@ path_add "$HOME/.local/bin"
 # Quitting Claude with background work still running ends it, rather than handing the session to Claude's
 # background service, where hc can't see it and lookout loses track of the agent
 export CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF=1
+# Tab completes claude-account with the saved accounts
+_claude_account() {
+    local names=$(cd ~/.claude/accounts 2>/dev/null && ls)
+    COMPREPLY=($(compgen -W "save rm ${names//.json/}" -- "${COMP_WORDS[COMP_CWORD]}"))
+}
+complete -F _claude_account claude-account
 
 # bun
 export BUN_INSTALL="$HOME/.bun"
